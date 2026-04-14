@@ -4,12 +4,13 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import type { EngineLineInfo } from '@/components/EngineAnalysis';
 
 export function useEngine() {
-  const [enabled, setEnabled] = useState(false);
   const [lines, setLines] = useState<EngineLineInfo[]>([]);
   const [depth, setDepth] = useState(0);
   const [isThinking, setIsThinking] = useState(false);
+  const [ready, setReady] = useState(false);
   const workerRef = useRef<Worker | null>(null);
   const pendingFen = useRef<string | null>(null);
+  const currentTurnRef = useRef<'w' | 'b'>('w');
 
   const initWorker = useCallback(() => {
     if (workerRef.current) return;
@@ -22,8 +23,13 @@ export function useEngine() {
 
       worker.onmessage = (e) => {
         const msg = e.data as string;
+        if (typeof msg !== 'string') return;
 
-        if (msg.startsWith('info depth')) {
+        if (msg === 'uciok' || msg.startsWith('readyok')) {
+          setReady(true);
+        }
+
+        if (msg.startsWith('info') && msg.includes('depth') && msg.includes(' pv ')) {
           const parts = msg.split(' ');
           const depthIdx = parts.indexOf('depth');
           const scoreIdx = parts.indexOf('score');
@@ -35,25 +41,32 @@ export function useEngine() {
           const d = parseInt(parts[depthIdx + 1]);
           const lineNum = multipvIdx !== -1 ? parseInt(parts[multipvIdx + 1]) : 1;
           const scoreType = parts[scoreIdx + 1];
-          let score = parseInt(parts[scoreIdx + 2]);
-          let mate: number | null = null;
+          let rawScore = parseInt(parts[scoreIdx + 2]);
 
+          // Normalize to white's perspective
+          const sign = currentTurnRef.current === 'w' ? 1 : -1;
+
+          let mate: number | null = null;
           if (scoreType === 'mate') {
-            mate = score;
-            score = score > 0 ? 10000 : -10000;
+            mate = rawScore * sign;
+            rawScore = rawScore > 0 ? 10000 : -10000;
           }
+          const score = rawScore * sign;
 
           const pv = parts.slice(pvIdx + 1).join(' ');
 
           parsedLines.set(lineNum, { depth: d, score, mate, pv });
           setDepth(d);
 
-          const sorted = Array.from(parsedLines.values()).sort((a, b) => b.score - a.score);
+          const sorted = Array.from(parsedLines.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map((entry) => entry[1]);
           setLines([...sorted]);
         }
 
         if (msg.startsWith('bestmove')) {
           setIsThinking(false);
+          parsedLines.clear();
         }
       };
 
@@ -61,16 +74,15 @@ export function useEngine() {
       worker.postMessage('setoption name MultiPV value 3');
       worker.postMessage('isready');
 
-      // If there's a pending position, analyze it
       if (pendingFen.current) {
         const fen = pendingFen.current;
         pendingFen.current = null;
         setTimeout(() => {
           worker.postMessage('stop');
           worker.postMessage(`position fen ${fen}`);
-          worker.postMessage('go depth 20');
+          worker.postMessage('go depth 22');
           setIsThinking(true);
-        }, 100);
+        }, 200);
       }
     } catch {
       console.error('Failed to load Stockfish');
@@ -79,7 +91,9 @@ export function useEngine() {
 
   const analyze = useCallback(
     (fen: string) => {
-      if (!enabled) return;
+      // Extract turn from FEN (second field)
+      const turn = fen.split(' ')[1] === 'b' ? 'b' : 'w';
+      currentTurnRef.current = turn;
 
       const worker = workerRef.current;
       if (!worker) {
@@ -93,33 +107,18 @@ export function useEngine() {
       setIsThinking(true);
       worker.postMessage('stop');
       worker.postMessage(`position fen ${fen}`);
-      worker.postMessage('go depth 20');
+      worker.postMessage('go depth 22');
     },
-    [enabled, initWorker]
+    [initWorker]
   );
 
-  const toggle = useCallback(() => {
-    setEnabled((prev) => {
-      const next = !prev;
-      if (!next && workerRef.current) {
-        workerRef.current.postMessage('stop');
-        setLines([]);
-        setDepth(0);
-        setIsThinking(false);
-      }
-      if (next && !workerRef.current) {
-        initWorker();
-      }
-      return next;
-    });
-  }, [initWorker]);
-
   useEffect(() => {
+    initWorker();
     return () => {
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, []);
+  }, [initWorker]);
 
-  return { enabled, lines, depth, isThinking, analyze, toggle };
+  return { lines, depth, isThinking, ready, analyze };
 }
