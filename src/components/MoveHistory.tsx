@@ -17,45 +17,48 @@ export default function MoveHistory({ moves, currentMoveIndex, onMoveClick }: Mo
   }
 
   return (
-    <div className="bg-[var(--surface)] rounded-lg border border-[var(--border)] overflow-hidden">
-      <div className="px-3 py-2 border-b border-[var(--border)] text-sm font-medium text-[var(--muted)]">
+    <div className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden">
+      <div className="px-3 py-2 border-b border-[var(--border)] text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
         Moves
       </div>
-      <div className="max-h-[400px] overflow-y-auto p-2">
+      <div className="max-h-[320px] overflow-y-auto">
         {pairs.length === 0 && (
-          <p className="text-[var(--muted)] text-sm text-center py-4">No moves yet</p>
+          <p className="text-[var(--muted)] text-sm text-center py-6">No moves yet</p>
         )}
-        <div className="grid grid-cols-[2rem_1fr_1fr] gap-y-0.5 text-sm">
-          {pairs.map((pair) => (
-            <div key={pair.number} className="contents">
-              <span className="text-[var(--muted)] text-right pr-2">{pair.number}.</span>
+        {pairs.map((pair) => (
+          <div
+            key={pair.number}
+            className="grid grid-cols-[2.5rem_1fr_1fr] border-b border-[var(--border)]/50 text-sm font-mono"
+          >
+            <span className="text-[var(--muted)] text-right px-2 py-1 bg-[var(--background)]/40">
+              {pair.number}
+            </span>
+            <button
+              onClick={() => onMoveClick((pair.number - 1) * 2)}
+              className={`text-left px-2 py-1 hover:bg-[var(--surface-2)] transition-colors ${
+                currentMoveIndex === (pair.number - 1) * 2
+                  ? 'bg-[var(--accent)]/20 text-[var(--foreground-strong)] font-semibold'
+                  : 'text-[var(--foreground)]'
+              }`}
+            >
+              {pair.white}
+            </button>
+            {pair.black ? (
               <button
-                onClick={() => onMoveClick(((pair.number - 1) * 2))}
-                className={`text-left px-1.5 py-0.5 rounded hover:bg-[var(--primary)] transition-colors ${
-                  currentMoveIndex === (pair.number - 1) * 2
-                    ? 'bg-[var(--primary)] text-white'
+                onClick={() => onMoveClick((pair.number - 1) * 2 + 1)}
+                className={`text-left px-2 py-1 hover:bg-[var(--surface-2)] transition-colors ${
+                  currentMoveIndex === (pair.number - 1) * 2 + 1
+                    ? 'bg-[var(--accent)]/20 text-[var(--foreground-strong)] font-semibold'
                     : 'text-[var(--foreground)]'
                 }`}
               >
-                {pair.white}
+                {pair.black}
               </button>
-              {pair.black ? (
-                <button
-                  onClick={() => onMoveClick(((pair.number - 1) * 2) + 1)}
-                  className={`text-left px-1.5 py-0.5 rounded hover:bg-[var(--primary)] transition-colors ${
-                    currentMoveIndex === (pair.number - 1) * 2 + 1
-                      ? 'bg-[var(--primary)] text-white'
-                      : 'text-[var(--foreground)]'
-                  }`}
-                >
-                  {pair.black}
-                </button>
-              ) : (
-                <span />
-              )}
-            </div>
-          ))}
-        </div>
+            ) : (
+              <span />
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

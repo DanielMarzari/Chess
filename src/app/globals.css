@@ -4,35 +4,103 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
   --color-primary: var(--primary);
   --color-border: var(--border);
   --color-muted: var(--muted);
+  --color-accent: var(--accent);
 }
 
 :root {
-  --background: #1a1a2e;
-  --foreground: #e8e6e3;
-  --surface: #16213e;
-  --primary: #0f3460;
-  --accent: #e94560;
-  --border: #2a2a4a;
-  --muted: #8888aa;
-  --success: #22c55e;
-  --warning: #eab308;
-  --danger: #ef4444;
+  /* Lichess-inspired palette */
+  --background: #161512;
+  --surface: #2b2a26;
+  --surface-2: #3d3a34;
+  --foreground: #bababa;
+  --foreground-strong: #dddddd;
+  --muted: #8f8d89;
+  --border: #404040;
+  --primary: #3d3a34;
+  --accent: #759900;          /* Lichess green */
+  --accent-hover: #8cb600;
+  --danger: #dc322f;
+  --warning: #d09341;
+  --success: #759900;
+  --info: #3893e8;
+  /* Board colors */
+  --square-light: #f0d9b5;
+  --square-dark: #b58863;
+  --square-highlight: rgba(155, 199, 0, 0.45);
+  --square-last-move: rgba(155, 199, 0, 0.25);
 }
 
 * {
   box-sizing: border-box;
 }
 
-body {
+html, body {
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: "Noto Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Eval bar gradient */
-.eval-bar {
-  background: linear-gradient(to top, #1a1a1a 0%, #1a1a1a var(--black-pct), #f0f0f0 var(--black-pct), #f0f0f0 100%);
+/* Monospace for moves */
+.font-mono, .mono {
+  font-family: "Roboto Mono", "SF Mono", Menlo, monospace;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Range input styling (Lichess-style) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: var(--accent-hover);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+/* Link / button focus */
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

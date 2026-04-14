@@ -22,17 +22,17 @@ export default function ChessBoard({
   arrowsAndHighlights,
 }: ChessBoardProps) {
   return (
-    <div className="rounded-lg overflow-hidden shadow-xl">
+    <div className="shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
       <Chessboard
         position={position}
         onPieceDrop={(source, target) => onPieceDrop(source, target)}
         boardOrientation={boardOrientation}
         boardWidth={boardWidth}
         customBoardStyle={{
-          borderRadius: '0',
+          borderRadius: '2px',
         }}
-        customDarkSquareStyle={{ backgroundColor: '#779952' }}
-        customLightSquareStyle={{ backgroundColor: '#edeed1' }}
+        customDarkSquareStyle={{ backgroundColor: '#b58863' }}
+        customLightSquareStyle={{ backgroundColor: '#f0d9b5' }}
         customArrows={arrowsAndHighlights?.arrows}
         customSquareStyles={arrowsAndHighlights?.customSquareStyles}
         animationDuration={200}
