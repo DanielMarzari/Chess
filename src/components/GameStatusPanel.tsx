@@ -45,7 +45,7 @@ export default function GameStatusPanel({
         )}
       </div>
       <div className="p-3 space-y-2 text-sm">
-        {mode === 'cpu' && cpuColor && (
+        {(mode === 'cpu' || mode === 'coach') && cpuColor && (
           <div className="flex items-center justify-between text-xs">
             <span className="text-[var(--muted)]">Opponent</span>
             <span className="text-[var(--foreground-strong)] font-mono">
@@ -54,9 +54,8 @@ export default function GameStatusPanel({
           </div>
         )}
         {mode === 'coach' && (
-          <div className="text-[var(--accent)] text-[11px] bg-[var(--accent)]/10 rounded px-2 py-1 leading-relaxed">
-            Hot-seat training — you control both sides. The coach stops the game on any blunder,
-            mistake, or inaccuracy.
+          <div className="text-[var(--accent)] text-[11px] bg-[var(--accent)]/10 rounded px-2 py-1">
+            Coach active — you'll be stopped on blunders, mistakes, and inaccuracies.
           </div>
         )}
         {mode === 'free' && (
@@ -71,7 +70,7 @@ export default function GameStatusPanel({
           </div>
         )}
 
-        {phase === 'playing' && mode === 'cpu' && (
+        {phase === 'playing' && (mode === 'cpu' || mode === 'coach') && (
           <button
             onClick={onResign}
             disabled={!canResign}
