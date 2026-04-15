@@ -33,15 +33,16 @@ function eloToSkill(elo: number): number {
 }
 
 function eloMoveTime(elo: number): number {
-  if (elo < 1000) return 80;
-  if (elo < 1200) return 120;
-  if (elo < 1400) return 200;
-  if (elo < 1600) return 350;
-  if (elo < 1800) return 500;
-  if (elo < 2000) return 700;
-  if (elo < 2200) return 900;
-  if (elo < 2400) return 1100;
-  return 1400;
+  // Minimum move time of ~600ms so there's a real premove window even
+  // at low ELO, then scales up with strength.
+  if (elo < 1200) return 600;
+  if (elo < 1400) return 650;
+  if (elo < 1600) return 750;
+  if (elo < 1800) return 900;
+  if (elo < 2000) return 1100;
+  if (elo < 2200) return 1300;
+  if (elo < 2400) return 1500;
+  return 1800;
 }
 
 type Task =

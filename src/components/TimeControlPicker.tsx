@@ -7,9 +7,10 @@ import { Clock, X } from 'lucide-react';
 interface TimeControlPickerProps {
   currentTc: TimeControl | null;
   onSelect: (tc: TimeControl | null) => void;
+  locked?: boolean;
 }
 
-export default function TimeControlPicker({ currentTc, onSelect }: TimeControlPickerProps) {
+export default function TimeControlPicker({ currentTc, onSelect, locked = false }: TimeControlPickerProps) {
   const [open, setOpen] = useState(false);
 
   const groups = [
@@ -22,15 +23,17 @@ export default function TimeControlPicker({ currentTc, onSelect }: TimeControlPi
   return (
     <div className="bg-[var(--surface)] rounded border border-[var(--border)]">
       <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full px-3 py-2 flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold hover:bg-[var(--surface-2)] transition-colors"
+        onClick={() => !locked && setOpen((o) => !o)}
+        disabled={locked}
+        className="w-full px-3 py-2 flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold hover:bg-[var(--surface-2)] transition-colors disabled:opacity-70 disabled:hover:bg-transparent disabled:cursor-not-allowed"
       >
         <Clock size={14} className={currentTc ? 'text-[var(--accent)]' : 'text-[var(--muted)]'} />
         <span className={currentTc ? 'text-[var(--foreground-strong)]' : 'text-[var(--muted)]'}>
           Time {currentTc ? `· ${currentTc.label}` : '(untimed)'}
         </span>
+        {locked && <span className="ml-auto text-[9px] normal-case text-[var(--muted)]">locked</span>}
       </button>
-      {open && (
+      {open && !locked && (
         <div className="border-t border-[var(--border)] p-2 space-y-2">
           {currentTc && (
             <button

@@ -11,6 +11,7 @@ interface OpponentPanelProps {
   elo: number;
   onEloChange: (elo: number) => void;
   isThinking: boolean;
+  locked?: boolean; // disables settings changes during an active game
 }
 
 const PRESETS: { label: string; elo: number; title?: boolean }[] = [
@@ -32,24 +33,27 @@ export default function OpponentPanel({
   elo,
   onEloChange,
   isThinking,
+  locked = false,
 }: OpponentPanelProps) {
   return (
     <div className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full px-3 py-2 border-b border-[var(--border)] flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold hover:bg-[var(--surface-2)] transition-colors"
+        disabled={locked}
+        className="w-full px-3 py-2 border-b border-[var(--border)] flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold hover:bg-[var(--surface-2)] transition-colors disabled:opacity-70 disabled:hover:bg-transparent disabled:cursor-not-allowed"
       >
         <Bot size={14} className={enabled ? 'text-[var(--accent)]' : 'text-[var(--muted)]'} />
         <span className={enabled ? 'text-[var(--foreground-strong)]' : 'text-[var(--muted)]'}>
           Computer opponent {enabled && `· ${elo}`}
         </span>
-        {isThinking && (
+        {locked && <span className="ml-auto text-[9px] normal-case text-[var(--muted)]">locked</span>}
+        {!locked && isThinking && (
           <span className="ml-auto text-[10px] normal-case text-[var(--accent)] animate-pulse">thinking…</span>
         )}
       </button>
 
       {enabled && (
-        <div className="p-3 space-y-3">
+        <div className={`p-3 space-y-3 ${locked ? 'opacity-60 pointer-events-none' : ''}`}>
           <div>
             <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5">
               Computer plays
@@ -59,6 +63,7 @@ export default function OpponentPanel({
                 <button
                   key={c}
                   onClick={() => onColorChange(c)}
+                  disabled={locked}
                   className={`py-1.5 text-xs rounded capitalize transition-colors ${
                     color === c
                       ? 'bg-[var(--accent)] text-white font-semibold'
@@ -83,6 +88,7 @@ export default function OpponentPanel({
               step={50}
               value={elo}
               onChange={(e) => onEloChange(parseInt(e.target.value))}
+              disabled={locked}
               className="w-full"
             />
           </div>
@@ -92,6 +98,7 @@ export default function OpponentPanel({
               <button
                 key={p.label}
                 onClick={() => onEloChange(p.elo)}
+                disabled={locked}
                 title={`${p.elo} ELO`}
                 className={`py-1 text-[11px] rounded transition-colors ${
                   Math.abs(elo - p.elo) < 50

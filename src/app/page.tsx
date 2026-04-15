@@ -2,8 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Chess, type Square } from 'chess.js';
-import { X as XIcon } from 'lucide-react';
-import ChessBoard from '@/components/ChessBoard';
+import ChessBoard, { type ChessboardRef } from '@/components/ChessBoard';
 import MoveHistory from '@/components/MoveHistory';
 import GameControls from '@/components/GameControls';
 import EngineAnalysis from '@/components/EngineAnalysis';
@@ -33,7 +32,7 @@ export default function Home() {
   const [showImport, setShowImport] = useState(false);
   const [status, setStatus] = useState('');
   const [computerPlays, setComputerPlays] = useState<'w' | 'b' | null>(null);
-  const [premoves, setPremoves] = useState<{ from: string; to: string }[]>([]);
+  const boardRef = useRef<ChessboardRef>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showCoords, setShowCoords] = useState(true);
   const [moveEvals, setMoveEvals] = useState<(PlyEval | null)[]>([]);
@@ -137,6 +136,10 @@ export default function Home() {
 
   const opening = useMemo(() => identifyOpening(moveHistory), [moveHistory]);
 
+  // A game is "in progress" once moves have been made and it hasn't ended.
+  // While in progress, time controls and ELO are locked to prevent mid-game changes.
+  const gameInProgress = moveHistory.length > 0 && !game.isGameOver();
+
   // Resolve opponent color
   useEffect(() => {
     if (!sf.opponentEnabled) {
@@ -238,55 +241,15 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [currentFenForEngine, applyMove]);
 
-  // Try premoves: when it becomes our turn, pop the first queued move
-  useEffect(() => {
-    if (premoves.length === 0) return;
-    if (!sf.opponentEnabled || !computerPlays) {
-      setPremoves([]);
-      return;
-    }
-    if (game.turn() === computerPlays) return;
-    if (currentMoveIndex !== moveHistory.length - 1) return;
-
-    const [first, ...rest] = premoves;
-    const test = new Chess(game.fen());
-    let ok = false;
-    try {
-      const r = test.move({ from: first.from, to: first.to, promotion: 'q' });
-      ok = !!r;
-    } catch {
-      ok = false;
-    }
-    if (ok) {
-      applyMove(first.from, first.to, 'q');
-      setPremoves(rest);
-    } else {
-      setPremoves([]);
-    }
-  }, [game, premoves, sf.opponentEnabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
+  // Premoves are handled natively by react-chessboard (arePremovesAllowed):
+  // while it's the opponent's turn, drops are queued internally; when the
+  // opponent moves and it's our turn, the library fires onPieceDrop for the
+  // first premove in sequence. onPieceDrop just tries to apply it; if we
+  // return false, the library clears the whole queue.
 
   const onPieceDrop = useCallback(
-    (source: string, target: string) => {
-      const atLive = currentMoveIndex === moveHistory.length - 1;
-
-      if (sf.opponentEnabled && computerPlays && atLive && game.turn() === computerPlays) {
-        // Human is queueing a premove. Loosely validate: piece must be human's color
-        // Simulate all existing premoves forward to check piece color at source
-        try {
-          const sim = new Chess(game.fen());
-          // We can't know opponent's move, so just check source piece color
-          const piece = sim.get(source as Square);
-          if (piece && piece.color !== computerPlays) {
-            setPremoves((prev) => [...prev, { from: source, to: target }]);
-          }
-        } catch {
-          // noop
-        }
-        return false;
-      }
-      return applyMove(source, target);
-    },
-    [applyMove, sf.opponentEnabled, computerPlays, game, currentMoveIndex, moveHistory.length]
+    (source: string, target: string) => applyMove(source, target),
+    [applyMove]
   );
 
   // Game-end detection
@@ -309,7 +272,7 @@ export default function Home() {
 
   const goToMove = useCallback(
     (index: number) => {
-      setPremoves([]);
+      boardRef.current?.clearPremoves();
       setCurrentMoveIndex(index);
       const fen = positions[index + 1] || positions[0];
       setGame(new Chess(fen));
@@ -319,7 +282,7 @@ export default function Home() {
 
   const newGame = useCallback(() => {
     sf.cancelMove();
-    setPremoves([]);
+    boardRef.current?.clearPremoves();
     const g = new Chess();
     setGame(g);
     setMoveHistory([]);
@@ -340,7 +303,7 @@ export default function Home() {
   const undoMove = useCallback(() => {
     if (moveHistory.length === 0) return;
     sf.cancelMove();
-    setPremoves([]);
+    boardRef.current?.clearPremoves();
     const undoCount = sf.opponentEnabled && moveHistory.length >= 2 ? 2 : 1;
     const newHistory = moveHistory.slice(0, -undoCount);
     const newPositions = positions.slice(0, -undoCount);
@@ -467,7 +430,7 @@ export default function Home() {
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA') return;
 
       if (e.key === 'Escape') {
-        setPremoves([]);
+        boardRef.current?.clearPremoves();
         setAnnotating(null);
       } else if (e.key === 'ArrowLeft' && currentMoveIndex >= 0) goToMove(currentMoveIndex - 1);
       else if (e.key === 'ArrowRight' && currentMoveIndex < moveHistory.length - 1) goToMove(currentMoveIndex + 1);
@@ -530,14 +493,15 @@ export default function Home() {
           )}
 
           <ChessBoard
+            ref={boardRef}
             position={currentFen}
             onPieceDrop={onPieceDrop}
             boardOrientation={boardOrientation}
             boardWidth={BOARD_WIDTH}
             showCoords={showCoords}
             lastMove={lastMove}
-            premoves={premoves}
             externalArrow={hoverArrow}
+            allowPremoves={!!sf.opponentEnabled && !!computerPlays}
           />
 
           {clock.tc && (
@@ -559,15 +523,8 @@ export default function Home() {
                   CPU {sf.elo}
                 </span>
               )}
-              {premoves.length > 0 && (
-                <button
-                  onClick={() => setPremoves([])}
-                  className="px-2 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)] border border-[var(--warning)]/30 flex items-center gap-1 hover:bg-[var(--warning)]/25"
-                  title="Cancel all queued premoves (Esc)"
-                >
-                  {premoves.length} premove{premoves.length > 1 ? 's' : ''}
-                  <XIcon size={10} />
-                </button>
+              {sf.opponentEnabled && computerPlays && (
+                <span className="text-[10px] opacity-70">right-click to clear premoves</span>
               )}
             </div>
           </div>
@@ -616,7 +573,7 @@ export default function Home() {
 
         {/* Right side panel */}
         <div className="flex-1 space-y-2 w-full min-w-[280px] lg:max-w-sm">
-          <TimeControlPicker currentTc={clock.tc} onSelect={handleStartTimed} />
+          <TimeControlPicker currentTc={clock.tc} onSelect={handleStartTimed} locked={gameInProgress} />
           <OpponentPanel
             enabled={sf.opponentEnabled}
             onToggle={sf.toggleOpponent}
@@ -625,6 +582,7 @@ export default function Home() {
             elo={sf.elo}
             onEloChange={sf.setElo}
             isThinking={sf.isComputerThinking}
+            locked={gameInProgress}
           />
           <EngineAnalysis
             lines={sf.lines}
