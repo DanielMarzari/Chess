@@ -155,10 +155,24 @@ export default function Home() {
     setBoardOrientation(computerPlays === 'w' ? 'black' : 'white');
   }, [sf.opponentEnabled, computerPlays]);
 
-  // Apply a move — safely
+  // Live refs so callbacks don't need to depend on rapidly-changing state
+  // (the clock ticks every animation frame and would otherwise recreate
+  //  applyMove → restart opponent timer → cancel premoves → flicker UI)
+  const positionsRef = useRef(positions);
+  positionsRef.current = positions;
+  const currentMoveIndexRef = useRef(currentMoveIndex);
+  currentMoveIndexRef.current = currentMoveIndex;
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+  const soundRef = useRef(sound);
+  soundRef.current = sound;
+
+  // Stable applyMove — only recreated when setters change (which is never)
   const applyMove = useCallback(
     (source: string, target: string, promotion = 'q'): boolean => {
-      const currentFen = positions[currentMoveIndex + 1] || positions[0];
+      const idx = currentMoveIndexRef.current;
+      const pos = positionsRef.current;
+      const currentFen = pos[idx + 1] || pos[0];
       const g = new Chess(currentFen);
       let move;
       try {
@@ -168,22 +182,22 @@ export default function Home() {
       }
       if (!move) return false;
 
-      if (g.isCheckmate()) sound.play('victory');
-      else if (g.isDraw()) sound.play('draw');
-      else if (g.inCheck()) sound.play('check');
-      else if (move.flags.includes('k') || move.flags.includes('q')) sound.play('castle');
-      else if (move.flags.includes('c') || move.flags.includes('e')) sound.play('capture');
-      else sound.play('move');
+      if (g.isCheckmate()) soundRef.current.play('victory');
+      else if (g.isDraw()) soundRef.current.play('draw');
+      else if (g.inCheck()) soundRef.current.play('check');
+      else if (move.flags.includes('k') || move.flags.includes('q')) soundRef.current.play('castle');
+      else if (move.flags.includes('c') || move.flags.includes('e')) soundRef.current.play('capture');
+      else soundRef.current.play('move');
 
-      if (clock.tc) clock.pressMove(move.color);
+      if (clockRef.current.tc) clockRef.current.pressMove(move.color);
 
       setMoveHistory((prev) => {
-        const h = prev.slice(0, currentMoveIndex + 1);
+        const h = prev.slice(0, idx + 1);
         h.push(move.san);
         return h;
       });
       setPositions((prev) => {
-        const p = prev.slice(0, currentMoveIndex + 2);
+        const p = prev.slice(0, idx + 2);
         p.push(g.fen());
         return p;
       });
@@ -191,23 +205,27 @@ export default function Home() {
       setCurrentMoveIndex((i) => i + 1);
       return true;
     },
-    [currentMoveIndex, positions, sound, clock]
+    []
   );
 
-  // Opponent turn
+  // Opponent turn — depends only on primitives that mark "it's CPU's turn"
   const requestMoveRef = useRef(sf.requestMove);
   requestMoveRef.current = sf.requestMove;
 
-  useEffect(() => {
-    if (!sf.opponentEnabled || !computerPlays) return;
-    if (currentMoveIndex !== moveHistory.length - 1) return;
-    if (game.turn() !== computerPlays) return;
-    if (game.isGameOver()) return;
+  // Computed: is the CPU up to move right now at the live position?
+  const cpuToMove =
+    !!sf.opponentEnabled &&
+    !!computerPlays &&
+    currentMoveIndex === moveHistory.length - 1 &&
+    game.turn() === computerPlays &&
+    !game.isGameOver();
+  const currentFenForEngine = cpuToMove ? game.fen() : null;
 
-    const fen = game.fen();
+  useEffect(() => {
+    if (!currentFenForEngine) return;
+    const fen = currentFenForEngine;
     const timer = setTimeout(() => {
       requestMoveRef.current(fen, (move) => {
-        // Guard: validate against current position to avoid stale bestmove issues
         const test = new Chess(fen);
         try {
           test.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
@@ -218,7 +236,7 @@ export default function Home() {
       });
     }, 250);
     return () => clearTimeout(timer);
-  }, [game, sf.opponentEnabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
+  }, [currentFenForEngine, applyMove]);
 
   // Try premoves: when it becomes our turn, pop the first queued move
   useEffect(() => {
@@ -243,7 +261,6 @@ export default function Home() {
       applyMove(first.from, first.to, 'q');
       setPremoves(rest);
     } else {
-      // Invalid — clear the entire queue (it's now ambiguous)
       setPremoves([]);
     }
   }, [game, premoves, sf.opponentEnabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
