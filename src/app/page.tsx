@@ -10,6 +10,7 @@ import EvalBar from '@/components/EvalBar';
 import CpLossGraph from '@/components/CpLossGraph';
 import SetupPanel, { type GameMode } from '@/components/SetupPanel';
 import GameStatusPanel from '@/components/GameStatusPanel';
+import LiveStats from '@/components/LiveStats';
 import PgnImport from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
@@ -657,6 +658,12 @@ export default function Home() {
                 depth={sf.depth}
                 isThinking={sf.isAnalyzing}
                 onHoverLine={setHoverArrow}
+              />
+              <LiveStats
+                nags={nags}
+                whiteAccuracy={whiteAcc}
+                blackAccuracy={blackAcc}
+                moveCount={moveHistory.length}
               />
               <MoveHistory
                 moves={moveHistory}
