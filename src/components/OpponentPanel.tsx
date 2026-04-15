@@ -1,7 +1,7 @@
 'use client';
 
 import { Bot } from 'lucide-react';
-import type { OpponentColor } from '@/hooks/useOpponent';
+import type { OpponentColor } from '@/hooks/useStockfish';
 
 interface OpponentPanelProps {
   enabled: boolean;
@@ -50,7 +50,6 @@ export default function OpponentPanel({
 
       {enabled && (
         <div className="p-3 space-y-3">
-          {/* Color selection */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-1.5">
               Computer plays
@@ -72,7 +71,6 @@ export default function OpponentPanel({
             </div>
           </div>
 
-          {/* ELO slider */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Strength</span>
@@ -89,7 +87,6 @@ export default function OpponentPanel({
             />
           </div>
 
-          {/* Presets */}
           <div className="grid grid-cols-4 gap-1">
             {PRESETS.map((p) => (
               <button

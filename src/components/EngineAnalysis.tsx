@@ -3,13 +3,9 @@
 import { useState } from 'react';
 import { Cpu } from 'lucide-react';
 import type { Square } from 'chess.js';
+import type { EngineLineInfo } from '@/hooks/useStockfish';
 
-export interface EngineLineInfo {
-  depth: number;
-  score: number;
-  mate: number | null;
-  pv: string;
-}
+export type { EngineLineInfo };
 
 interface EngineAnalysisProps {
   lines: EngineLineInfo[];
@@ -19,9 +15,7 @@ interface EngineAnalysisProps {
 }
 
 function formatScore(line: EngineLineInfo): string {
-  if (line.mate !== null) {
-    return line.mate >= 0 ? `M${line.mate}` : `-M${Math.abs(line.mate)}`;
-  }
+  if (line.mate !== null) return line.mate >= 0 ? `M${line.mate}` : `-M${Math.abs(line.mate)}`;
   const score = line.score / 100;
   return score >= 0 ? `+${score.toFixed(2)}` : score.toFixed(2);
 }
@@ -36,14 +30,18 @@ export default function EngineAnalysis({ lines, depth, isThinking, onHoverLine }
   const [hovered, setHovered] = useState<number | null>(null);
 
   return (
-    <div className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden">
+    <div
+      className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden"
+      onMouseLeave={() => {
+        setHovered(null);
+        onHoverLine?.(null);
+      }}
+    >
       <div className="px-3 py-2 border-b border-[var(--border)] flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
         <Cpu size={14} className="text-[var(--accent)]" />
         <span>Analysis {depth > 0 && `· d${depth}`}</span>
         {isThinking && (
-          <span className="ml-auto text-[10px] normal-case text-[var(--accent)] animate-pulse">
-            thinking…
-          </span>
+          <span className="ml-auto text-[10px] normal-case text-[var(--accent)] animate-pulse">thinking…</span>
         )}
       </div>
 
@@ -62,8 +60,7 @@ export default function EngineAnalysis({ lines, depth, isThinking, onHoverLine }
               onHoverLine?.(firstMoveFromPv(line.pv));
             }}
             onMouseLeave={() => {
-              setHovered(null);
-              onHoverLine?.(null);
+              // Handled at container level for robustness
             }}
           >
             <span className="font-bold w-12 text-right shrink-0 text-[var(--foreground-strong)]">

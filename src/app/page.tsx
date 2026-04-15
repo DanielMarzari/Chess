@@ -2,23 +2,25 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Chess, type Square } from 'chess.js';
+import { X as XIcon } from 'lucide-react';
 import ChessBoard from '@/components/ChessBoard';
 import MoveHistory from '@/components/MoveHistory';
 import GameControls from '@/components/GameControls';
 import EngineAnalysis from '@/components/EngineAnalysis';
-import EvalGraph, { type PlyEval } from '@/components/EvalGraph';
+import EvalBar from '@/components/EvalBar';
+import CpLossGraph from '@/components/CpLossGraph';
 import OpponentPanel from '@/components/OpponentPanel';
 import PgnImport from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
 import TimeControlPicker from '@/components/TimeControlPicker';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
 import AnnotationEditor from '@/components/AnnotationEditor';
-import { useEngine } from '@/hooks/useEngine';
-import { useOpponent } from '@/hooks/useOpponent';
+import { useStockfish } from '@/hooks/useStockfish';
 import { useSound } from '@/hooks/useSound';
 import { useClock, type TimeControl } from '@/hooks/useClock';
-import { cpToWinPercent, classifyMove, moveAccuracy, type NagType } from '@/lib/accuracy';
+import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
 import { identifyOpening } from '@/lib/openings';
+import { buildPgn, todayTag } from '@/lib/pgn';
 
 const BOARD_WIDTH = 560;
 
@@ -31,30 +33,27 @@ export default function Home() {
   const [showImport, setShowImport] = useState(false);
   const [status, setStatus] = useState('');
   const [computerPlays, setComputerPlays] = useState<'w' | 'b' | null>(null);
-  const [premove, setPremove] = useState<{ from: string; to: string } | null>(null);
+  const [premoves, setPremoves] = useState<{ from: string; to: string }[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [showCoords, setShowCoords] = useState(true);
-  // Per-move data
   const [moveEvals, setMoveEvals] = useState<(PlyEval | null)[]>([]);
   const [nags, setNags] = useState<(NagType | null)[]>([]);
   const [annotations, setAnnotations] = useState<Record<number, string>>({});
-  // Game-end state
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
   const gameResultShownRef = useRef<string | null>(null);
-  // PV hover arrow
   const [hoverArrow, setHoverArrow] = useState<{ from: Square; to: Square } | null>(null);
-  // Annotation editor
   const [annotating, setAnnotating] = useState<{ index: number; x: number; y: number } | null>(null);
 
-  const engine = useEngine();
-  const opponent = useOpponent();
+  const sf = useStockfish();
   const sound = useSound();
 
-  // Clock
-  const onFlag = useCallback((color: 'w' | 'b') => {
-    sound.play('defeat');
-    setGameResult({ type: 'timeout', winner: color === 'w' ? 'b' : 'w' });
-  }, [sound]);
+  const onFlag = useCallback(
+    (color: 'w' | 'b') => {
+      sound.play('defeat');
+      setGameResult({ type: 'timeout', winner: color === 'w' ? 'b' : 'w' });
+    },
+    [sound]
+  );
   const clock = useClock(onFlag);
 
   const showToast = useCallback((msg: string) => {
@@ -62,7 +61,6 @@ export default function Home() {
     setTimeout(() => setToast(null), 1800);
   }, []);
 
-  // Status line
   const updateStatus = useCallback((g: Chess) => {
     if (g.isCheckmate()) setStatus(`Checkmate — ${g.turn() === 'w' ? 'Black' : 'White'} wins`);
     else if (g.isDraw()) {
@@ -78,33 +76,27 @@ export default function Home() {
     updateStatus(game);
   }, [game, updateStatus]);
 
-  // Engine analysis — always on, re-run on position change
+  // Engine analysis on position change
   useEffect(() => {
     const fen = positions[currentMoveIndex + 1] || positions[0];
-    engine.analyze(fen);
+    sf.analyze(fen);
   }, [currentMoveIndex, positions]); // eslint-disable-line
 
-  // Capture engine evals into moveEvals when we're at the live position
+  // Capture live eval into moveEvals
   useEffect(() => {
     const atLive = currentMoveIndex === moveHistory.length - 1;
-    if (!atLive) return;
-    if (engine.lines.length === 0) return;
-    if (currentMoveIndex < 0) return;
-    const primary = engine.lines[0];
+    if (!atLive || sf.lines.length === 0 || currentMoveIndex < 0) return;
+    const primary = sf.lines[0];
     if (primary.depth < 10) return;
     setMoveEvals((prev) => {
       const next = [...prev];
       while (next.length < moveHistory.length) next.push(null);
-      next[currentMoveIndex] = {
-        score: primary.score,
-        mate: primary.mate,
-        depth: primary.depth,
-      };
+      next[currentMoveIndex] = { score: primary.score, mate: primary.mate, depth: primary.depth };
       return next;
     });
-  }, [engine.lines, currentMoveIndex, moveHistory.length]);
+  }, [sf.lines, currentMoveIndex, moveHistory.length]);
 
-  // Recompute NAGs whenever evals change
+  // NAGs
   useEffect(() => {
     const newNags: (NagType | null)[] = [];
     for (let i = 0; i < moveHistory.length; i++) {
@@ -118,7 +110,6 @@ export default function Home() {
       const beforeWhite = cpToWinPercent(before, moveEvals[i - 1]?.mate ?? null);
       const afterWhite = cpToWinPercent(after, moveEvals[i]?.mate ?? null);
       const winLoss = mover === 'w' ? beforeWhite - afterWhite : afterWhite - beforeWhite;
-      // Convert win% loss back to approximate cp loss
       const cpLoss = Math.max(0, winLoss * 10);
       newNags.push(classifyMove(cpLoss));
     }
@@ -136,8 +127,7 @@ export default function Home() {
       const mover: 'w' | 'b' = i % 2 === 0 ? 'w' : 'b';
       const winBefore = cpToWinPercent(before, moveEvals[i - 1]?.mate ?? null);
       const winAfter = cpToWinPercent(after, moveEvals[i]?.mate ?? null);
-      const acc = moveAccuracy(winBefore, winAfter, mover);
-      (mover === 'w' ? whites : blacks).push(acc);
+      (mover === 'w' ? whites : blacks).push(moveAccuracy(winBefore, winAfter, mover));
     }
     return {
       whiteAcc: whites.length ? whites.reduce((a, b) => a + b, 0) / whites.length : null,
@@ -145,35 +135,39 @@ export default function Home() {
     };
   }, [moveEvals, moveHistory.length]);
 
-  // Opening ID
   const opening = useMemo(() => identifyOpening(moveHistory), [moveHistory]);
 
   // Resolve opponent color
   useEffect(() => {
-    if (!opponent.enabled) {
+    if (!sf.opponentEnabled) {
       setComputerPlays(null);
       return;
     }
     setComputerPlays(
-      opponent.color === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : opponent.color === 'white' ? 'w' : 'b'
+      sf.opponentColor === 'random'
+        ? Math.random() < 0.5 ? 'w' : 'b'
+        : sf.opponentColor === 'white' ? 'w' : 'b'
     );
-  }, [opponent.enabled, opponent.color]);
+  }, [sf.opponentEnabled, sf.opponentColor]);
 
-  // Auto-flip board
   useEffect(() => {
-    if (!opponent.enabled || !computerPlays) return;
+    if (!sf.opponentEnabled || !computerPlays) return;
     setBoardOrientation(computerPlays === 'w' ? 'black' : 'white');
-  }, [opponent.enabled, computerPlays]);
+  }, [sf.opponentEnabled, computerPlays]);
 
-  // Apply a move (with sounds)
+  // Apply a move — safely
   const applyMove = useCallback(
     (source: string, target: string, promotion = 'q'): boolean => {
       const currentFen = positions[currentMoveIndex + 1] || positions[0];
       const g = new Chess(currentFen);
-      const move = g.move({ from: source, to: target, promotion });
+      let move;
+      try {
+        move = g.move({ from: source, to: target, promotion });
+      } catch {
+        return false;
+      }
       if (!move) return false;
 
-      // Sounds
       if (g.isCheckmate()) sound.play('victory');
       else if (g.isDraw()) sound.play('draw');
       else if (g.inCheck()) sound.play('check');
@@ -181,7 +175,6 @@ export default function Home() {
       else if (move.flags.includes('c') || move.flags.includes('e')) sound.play('capture');
       else sound.play('move');
 
-      // Clock
       if (clock.tc) clock.pressMove(move.color);
 
       setMoveHistory((prev) => {
@@ -201,12 +194,12 @@ export default function Home() {
     [currentMoveIndex, positions, sound, clock]
   );
 
-  // Opponent turn logic
-  const requestMoveRef = useRef(opponent.requestMove);
-  requestMoveRef.current = opponent.requestMove;
+  // Opponent turn
+  const requestMoveRef = useRef(sf.requestMove);
+  requestMoveRef.current = sf.requestMove;
 
   useEffect(() => {
-    if (!opponent.enabled || !computerPlays) return;
+    if (!sf.opponentEnabled || !computerPlays) return;
     if (currentMoveIndex !== moveHistory.length - 1) return;
     if (game.turn() !== computerPlays) return;
     if (game.isGameOver()) return;
@@ -214,42 +207,72 @@ export default function Home() {
     const fen = game.fen();
     const timer = setTimeout(() => {
       requestMoveRef.current(fen, (move) => {
+        // Guard: validate against current position to avoid stale bestmove issues
+        const test = new Chess(fen);
+        try {
+          test.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+        } catch {
+          return;
+        }
         applyMove(move.from, move.to, move.promotion || 'q');
       });
-    }, 300);
+    }, 250);
     return () => clearTimeout(timer);
-  }, [game, opponent.enabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
+  }, [game, sf.opponentEnabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
 
-  // Try premove when it's our turn
+  // Try premoves: when it becomes our turn, pop the first queued move
   useEffect(() => {
-    if (!premove) return;
-    if (!opponent.enabled || !computerPlays) { setPremove(null); return; }
+    if (premoves.length === 0) return;
+    if (!sf.opponentEnabled || !computerPlays) {
+      setPremoves([]);
+      return;
+    }
     if (game.turn() === computerPlays) return;
     if (currentMoveIndex !== moveHistory.length - 1) return;
 
+    const [first, ...rest] = premoves;
     const test = new Chess(game.fen());
-    const result = test.move({ from: premove.from, to: premove.to, promotion: 'q' });
-    if (result) applyMove(premove.from, premove.to, 'q');
-    setPremove(null);
-  }, [game, premove, opponent.enabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
+    let ok = false;
+    try {
+      const r = test.move({ from: first.from, to: first.to, promotion: 'q' });
+      ok = !!r;
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      applyMove(first.from, first.to, 'q');
+      setPremoves(rest);
+    } else {
+      // Invalid — clear the entire queue (it's now ambiguous)
+      setPremoves([]);
+    }
+  }, [game, premoves, sf.opponentEnabled, computerPlays, currentMoveIndex, moveHistory.length, applyMove]);
 
   const onPieceDrop = useCallback(
     (source: string, target: string) => {
       const atLive = currentMoveIndex === moveHistory.length - 1;
-      if (opponent.enabled && computerPlays && atLive && game.turn() === computerPlays) {
-        const test = new Chess(game.fen());
-        const piece = test.get(source as Square);
-        if (piece && piece.color !== computerPlays) {
-          setPremove({ from: source, to: target });
+
+      if (sf.opponentEnabled && computerPlays && atLive && game.turn() === computerPlays) {
+        // Human is queueing a premove. Loosely validate: piece must be human's color
+        // Simulate all existing premoves forward to check piece color at source
+        try {
+          const sim = new Chess(game.fen());
+          // We can't know opponent's move, so just check source piece color
+          const piece = sim.get(source as Square);
+          if (piece && piece.color !== computerPlays) {
+            setPremoves((prev) => [...prev, { from: source, to: target }]);
+          }
+        } catch {
+          // noop
         }
         return false;
       }
       return applyMove(source, target);
     },
-    [applyMove, opponent.enabled, computerPlays, game, currentMoveIndex, moveHistory.length]
+    [applyMove, sf.opponentEnabled, computerPlays, game, currentMoveIndex, moveHistory.length]
   );
 
-  // Detect game-end state — fire once per unique end
+  // Game-end detection
   useEffect(() => {
     if (!game.isGameOver() || gameResult) return;
     const key = `${game.fen()}|${moveHistory.length}`;
@@ -257,24 +280,19 @@ export default function Home() {
     gameResultShownRef.current = key;
 
     let result: GameResult;
-    if (game.isCheckmate()) {
-      result = { type: 'checkmate', winner: game.turn() === 'w' ? 'b' : 'w' };
-    } else if (game.isStalemate()) {
-      result = { type: 'stalemate' };
-    } else if (game.isThreefoldRepetition()) {
-      result = { type: 'draw', reason: 'Draw by repetition' };
-    } else if (game.isInsufficientMaterial()) {
-      result = { type: 'draw', reason: 'Draw — insufficient material' };
-    } else {
-      result = { type: 'draw', reason: 'Draw' };
-    }
+    if (game.isCheckmate()) result = { type: 'checkmate', winner: game.turn() === 'w' ? 'b' : 'w' };
+    else if (game.isStalemate()) result = { type: 'stalemate' };
+    else if (game.isThreefoldRepetition()) result = { type: 'draw', reason: 'Draw by repetition' };
+    else if (game.isInsufficientMaterial()) result = { type: 'draw', reason: 'Draw — insufficient material' };
+    else result = { type: 'draw', reason: 'Draw' };
+
     clock.stop();
     setGameResult(result);
   }, [game, gameResult, moveHistory.length, clock]);
 
   const goToMove = useCallback(
     (index: number) => {
-      setPremove(null);
+      setPremoves([]);
       setCurrentMoveIndex(index);
       const fen = positions[index + 1] || positions[0];
       setGame(new Chess(fen));
@@ -283,8 +301,8 @@ export default function Home() {
   );
 
   const newGame = useCallback(() => {
-    opponent.cancelMove();
-    setPremove(null);
+    sf.cancelMove();
+    setPremoves([]);
     const g = new Chess();
     setGame(g);
     setMoveHistory([]);
@@ -297,16 +315,16 @@ export default function Home() {
     gameResultShownRef.current = null;
     if (clock.tc) clock.start(clock.tc);
     else clock.disable();
-    if (opponent.enabled && opponent.color === 'random') {
+    if (sf.opponentEnabled && sf.opponentColor === 'random') {
       setComputerPlays(Math.random() < 0.5 ? 'w' : 'b');
     }
-  }, [opponent, clock]);
+  }, [sf, clock]);
 
   const undoMove = useCallback(() => {
     if (moveHistory.length === 0) return;
-    opponent.cancelMove();
-    setPremove(null);
-    const undoCount = opponent.enabled && moveHistory.length >= 2 ? 2 : 1;
+    sf.cancelMove();
+    setPremoves([]);
+    const undoCount = sf.opponentEnabled && moveHistory.length >= 2 ? 2 : 1;
     const newHistory = moveHistory.slice(0, -undoCount);
     const newPositions = positions.slice(0, -undoCount);
     const fen = newPositions[newPositions.length - 1];
@@ -314,57 +332,91 @@ export default function Home() {
     setMoveHistory(newHistory);
     setPositions(newPositions);
     setCurrentMoveIndex(newHistory.length - 1);
-    setMoveEvals((prev) => prev.slice(0, newHistory.length));
-    setNags((prev) => prev.slice(0, newHistory.length));
-  }, [moveHistory, positions, opponent]);
+    setMoveEvals((p) => p.slice(0, newHistory.length));
+    setNags((p) => p.slice(0, newHistory.length));
+  }, [moveHistory, positions, sf]);
 
   const importPgn = useCallback((pgn: string) => {
     const g = new Chess();
-    try { g.loadPgn(pgn); } catch { showToast('Invalid PGN'); return; }
+    try {
+      g.loadPgn(pgn);
+    } catch {
+      showToast('Invalid PGN');
+      return;
+    }
     const history = g.history();
     const all = [new Chess().fen()];
     const replay = new Chess();
-    for (const m of history) { replay.move(m); all.push(replay.fen()); }
-    setGame(g);
-    setMoveHistory(history);
+    for (const m of history) {
+      try {
+        replay.move(m);
+      } catch {
+        break;
+      }
+      all.push(replay.fen());
+    }
+    setGame(new Chess(all[all.length - 1]));
+    setMoveHistory(history.slice(0, all.length - 1));
     setPositions(all);
-    setCurrentMoveIndex(history.length - 1);
-    setMoveEvals(Array(history.length).fill(null));
-    setNags(Array(history.length).fill(null));
+    setCurrentMoveIndex(all.length - 2);
+    setMoveEvals(Array(all.length - 1).fill(null));
+    setNags(Array(all.length - 1).fill(null));
   }, [showToast]);
 
   useEffect(() => {
     const pgn = sessionStorage.getItem('loadPgn');
-    if (pgn) { sessionStorage.removeItem('loadPgn'); importPgn(pgn); }
+    if (pgn) {
+      sessionStorage.removeItem('loadPgn');
+      importPgn(pgn);
+    }
   }, [importPgn]);
 
+  const getPgnMeta = useCallback(() => {
+    const white = sf.opponentEnabled && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
+    const black = sf.opponentEnabled && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
+    return {
+      event: sf.opponentEnabled ? 'vs Computer' : 'Casual Game',
+      site: 'chess.danmarzari.com',
+      date: todayTag(),
+      white,
+      black,
+      eco: opening?.eco,
+      opening: opening?.name,
+    };
+  }, [sf.opponentEnabled, sf.elo, computerPlays, opening]);
+
   const exportPgn = useCallback(() => {
-    const g = new Chess();
-    for (const m of moveHistory) g.move(m);
-    navigator.clipboard.writeText(g.pgn());
+    const pgn = buildPgn(moveHistory, getPgnMeta());
+    navigator.clipboard.writeText(pgn);
     showToast('PGN copied');
-  }, [moveHistory, showToast]);
+  }, [moveHistory, getPgnMeta, showToast]);
 
   const saveGame = useCallback(async () => {
-    const g = new Chess();
-    for (const m of moveHistory) g.move(m);
+    const meta = getPgnMeta();
+    const pgn = buildPgn(moveHistory, meta);
     try {
       const res = await fetch('/api/games', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pgn: g.pgn(), title: `Game ${new Date().toLocaleDateString()}` }),
+        body: JSON.stringify({
+          pgn,
+          title: `${meta.white} vs ${meta.black} — ${meta.date}`,
+          white: meta.white,
+          black: meta.black,
+        }),
       });
       showToast(res.ok ? 'Saved' : 'Save failed');
-    } catch { showToast('Save failed'); }
-  }, [moveHistory, showToast]);
+    } catch {
+      showToast('Save failed');
+    }
+  }, [moveHistory, getPgnMeta, showToast]);
 
   const handleResign = useCallback(() => {
-    if (!opponent.enabled || !computerPlays) return;
-    // Human resigns; winner is the computer
+    if (!sf.opponentEnabled || !computerPlays) return;
     sound.play('defeat');
     clock.stop();
     setGameResult({ type: 'resign', winner: computerPlays });
-  }, [opponent.enabled, computerPlays, sound, clock]);
+  }, [sf.opponentEnabled, computerPlays, sound, clock]);
 
   const handleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -374,15 +426,14 @@ export default function Home() {
     }
   }, []);
 
-  const handleStartTimed = useCallback((tc: TimeControl | null) => {
-    if (tc) {
-      clock.start(tc);
-    } else {
-      clock.disable();
-    }
-  }, [clock]);
+  const handleStartTimed = useCallback(
+    (tc: TimeControl | null) => {
+      if (tc) clock.start(tc);
+      else clock.disable();
+    },
+    [clock]
+  );
 
-  // Annotation save
   const saveAnnotation = useCallback((idx: number, value: string) => {
     setAnnotations((prev) => {
       const next = { ...prev };
@@ -393,13 +444,15 @@ export default function Home() {
     setAnnotating(null);
   }, []);
 
-  // Keyboard shortcuts
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+      const t = e.target as HTMLElement;
+      if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA') return;
 
-      if (e.key === 'Escape') { setPremove(null); setAnnotating(null); }
-      else if (e.key === 'ArrowLeft' && currentMoveIndex >= 0) goToMove(currentMoveIndex - 1);
+      if (e.key === 'Escape') {
+        setPremoves([]);
+        setAnnotating(null);
+      } else if (e.key === 'ArrowLeft' && currentMoveIndex >= 0) goToMove(currentMoveIndex - 1);
       else if (e.key === 'ArrowRight' && currentMoveIndex < moveHistory.length - 1) goToMove(currentMoveIndex + 1);
       else if (e.key === 'Home') goToMove(-1);
       else if (e.key === 'End') goToMove(moveHistory.length - 1);
@@ -416,42 +469,40 @@ export default function Home() {
   }, [currentMoveIndex, moveHistory.length, goToMove, newGame, undoMove, saveGame, exportPgn, handleResign]);
 
   const currentFen = positions[currentMoveIndex + 1] || positions[0];
-  const lastMove = currentMoveIndex >= 0
-    ? (() => {
-        // Derive last move squares by replaying up to currentMoveIndex and checking history
-        const g = new Chess();
-        for (let i = 0; i <= currentMoveIndex; i++) g.move(moveHistory[i]);
-        const hist = g.history({ verbose: true });
-        const last = hist[hist.length - 1];
-        return last ? { from: last.from, to: last.to } : null;
-      })()
-    : null;
 
-  const primaryScore = engine.lines[0]?.score ?? null;
-  const primaryMate = engine.lines[0]?.mate ?? null;
+  const lastMove = useMemo(() => {
+    if (currentMoveIndex < 0) return null;
+    try {
+      const g = new Chess();
+      for (let i = 0; i <= currentMoveIndex; i++) g.move(moveHistory[i]);
+      const hist = g.history({ verbose: true });
+      const last = hist[hist.length - 1];
+      return last ? { from: last.from, to: last.to } : null;
+    } catch {
+      return null;
+    }
+  }, [currentMoveIndex, moveHistory]);
+
+  const primaryScore = sf.lines[0]?.score ?? null;
+  const primaryMate = sf.lines[0]?.mate ?? null;
 
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
       <div className="flex flex-col lg:flex-row gap-3 items-start">
-        {/* Left: Centipawn-loss graph */}
+        {/* Left: vertical eval bar */}
         <div className="hidden lg:block shrink-0">
-          <EvalGraph
-            evals={moveEvals}
-            nags={nags}
+          <EvalBar
+            score={primaryScore}
+            mate={primaryMate}
+            depth={sf.depth}
             height={BOARD_WIDTH}
             orientation={boardOrientation}
-            currentMoveIndex={currentMoveIndex}
-            onJumpTo={goToMove}
-            isThinking={engine.isThinking}
-            currentDepth={engine.depth}
-            currentScore={primaryScore}
-            currentMate={primaryMate}
+            isAnalyzing={sf.isAnalyzing}
           />
         </div>
 
-        {/* Center: Board + clocks + status */}
-        <div className="shrink-0 mx-auto lg:mx-0 space-y-2" style={{ maxWidth: BOARD_WIDTH }}>
-          {/* Top clock */}
+        {/* Center: board + clocks + status */}
+        <div className="shrink-0 mx-auto lg:mx-0 space-y-2" style={{ maxWidth: BOARD_WIDTH, width: '100%' }}>
           {clock.tc && (
             <ClockDisplay
               seconds={boardOrientation === 'white' ? clock.state.black : clock.state.white}
@@ -468,11 +519,10 @@ export default function Home() {
             boardWidth={BOARD_WIDTH}
             showCoords={showCoords}
             lastMove={lastMove}
-            premove={premove}
+            premoves={premoves}
             externalArrow={hoverArrow}
           />
 
-          {/* Bottom clock */}
           {clock.tc && (
             <ClockDisplay
               seconds={boardOrientation === 'white' ? clock.state.white : clock.state.black}
@@ -485,24 +535,40 @@ export default function Home() {
           <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
             <span className="text-[var(--foreground-strong)]">{status}</span>
             <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-              {opponent.enabled && computerPlays && (
+              {sf.opponentEnabled && computerPlays && (
                 <span>
                   You: {computerPlays === 'w' ? '● Black' : '○ White'}
                   <span className="mx-2 text-[var(--border)]">|</span>
-                  CPU {opponent.elo}
+                  CPU {sf.elo}
                 </span>
               )}
-              {premove && (
-                <span className="px-2 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)] border border-[var(--warning)]/30">
-                  premove {premove.from}→{premove.to}
-                </span>
+              {premoves.length > 0 && (
+                <button
+                  onClick={() => setPremoves([])}
+                  className="px-2 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)] border border-[var(--warning)]/30 flex items-center gap-1 hover:bg-[var(--warning)]/25"
+                  title="Cancel all queued premoves (Esc)"
+                >
+                  {premoves.length} premove{premoves.length > 1 ? 's' : ''}
+                  <XIcon size={10} />
+                </button>
               )}
             </div>
           </div>
 
-          {/* Opening + accuracy row */}
+          {/* Centipawn-loss graph under board */}
+          {moveHistory.length > 0 && (
+            <CpLossGraph
+              evals={moveEvals}
+              nags={nags}
+              currentMoveIndex={currentMoveIndex}
+              onJumpTo={goToMove}
+              width={BOARD_WIDTH}
+            />
+          )}
+
+          {/* Opening + accuracy */}
           <div className="flex items-center justify-between text-xs">
-            <div className="text-[var(--muted)]">
+            <div className="text-[var(--muted)] truncate">
               {opening ? (
                 <>
                   <span className="font-mono text-[var(--accent)]">{opening.eco}</span>{' '}
@@ -513,7 +579,7 @@ export default function Home() {
               )}
             </div>
             {(whiteAcc !== null || blackAcc !== null) && (
-              <div className="flex items-center gap-3 font-mono">
+              <div className="flex items-center gap-3 font-mono shrink-0">
                 <span>
                   <span className="text-[var(--muted)]">W </span>
                   <span className="text-[var(--foreground-strong)] font-semibold">
@@ -531,22 +597,22 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right: Side panel */}
+        {/* Right side panel */}
         <div className="flex-1 space-y-2 w-full min-w-[280px] lg:max-w-sm">
           <TimeControlPicker currentTc={clock.tc} onSelect={handleStartTimed} />
           <OpponentPanel
-            enabled={opponent.enabled}
-            onToggle={opponent.toggle}
-            color={opponent.color}
-            onColorChange={opponent.setColor}
-            elo={opponent.elo}
-            onEloChange={opponent.setElo}
-            isThinking={opponent.isThinking}
+            enabled={sf.opponentEnabled}
+            onToggle={sf.toggleOpponent}
+            color={sf.opponentColor}
+            onColorChange={sf.setOpponentColor}
+            elo={sf.elo}
+            onEloChange={sf.setElo}
+            isThinking={sf.isComputerThinking}
           />
           <EngineAnalysis
-            lines={engine.lines}
-            depth={engine.depth}
-            isThinking={engine.isThinking}
+            lines={sf.lines}
+            depth={sf.depth}
+            isThinking={sf.isAnalyzing}
             onHoverLine={setHoverArrow}
           />
           <MoveHistory
@@ -577,7 +643,7 @@ export default function Home() {
             canUndo={moveHistory.length > 0}
             canGoBack={currentMoveIndex > -1}
             canGoForward={currentMoveIndex < moveHistory.length - 1}
-            canResign={!!opponent.enabled && !!computerPlays && !game.isGameOver()}
+            canResign={!!sf.opponentEnabled && !!computerPlays && !game.isGameOver()}
           />
         </div>
       </div>
@@ -586,11 +652,15 @@ export default function Home() {
 
       <GameEndModal
         result={gameResult}
-        humanColor={opponent.enabled && computerPlays ? (computerPlays === 'w' ? 'b' : 'w') : null}
+        humanColor={sf.opponentEnabled && computerPlays ? (computerPlays === 'w' ? 'b' : 'w') : null}
         whiteAccuracy={whiteAcc}
         blackAccuracy={blackAcc}
+        nags={nags}
         onClose={() => setGameResult(null)}
-        onNewGame={() => { setGameResult(null); newGame(); }}
+        onNewGame={() => {
+          setGameResult(null);
+          newGame();
+        }}
         onAnalyze={() => setGameResult(null)}
       />
 

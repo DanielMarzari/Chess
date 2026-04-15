@@ -1,6 +1,8 @@
 'use client';
 
 import { Award, Flag, Handshake, X } from 'lucide-react';
+import type { NagType } from '@/lib/accuracy';
+import { NAG_META } from '@/lib/accuracy';
 
 export type GameResult =
   | { type: 'checkmate'; winner: 'w' | 'b' }
@@ -11,12 +13,27 @@ export type GameResult =
 
 interface GameEndModalProps {
   result: GameResult | null;
-  humanColor: 'w' | 'b' | null; // color the user played; null = not playing vs CPU
+  humanColor: 'w' | 'b' | null;
   whiteAccuracy: number | null;
   blackAccuracy: number | null;
+  nags: (NagType | null)[];
   onClose: () => void;
   onNewGame: () => void;
   onAnalyze: () => void;
+}
+
+function countNagsByColor(nags: (NagType | null)[]): {
+  w: Record<string, number>;
+  b: Record<string, number>;
+} {
+  const w: Record<string, number> = {};
+  const b: Record<string, number> = {};
+  nags.forEach((n, i) => {
+    if (!n) return;
+    const target = i % 2 === 0 ? w : b;
+    target[n] = (target[n] || 0) + 1;
+  });
+  return { w, b };
 }
 
 export default function GameEndModal({
@@ -24,6 +41,7 @@ export default function GameEndModal({
   humanColor,
   whiteAccuracy,
   blackAccuracy,
+  nags,
   onClose,
   onNewGame,
   onAnalyze,
@@ -39,20 +57,21 @@ export default function GameEndModal({
       ? Flag
       : Award;
 
-  const youWon =
-    humanColor &&
-    'winner' in result &&
-    result.winner === humanColor;
-  const youLost =
-    humanColor &&
-    'winner' in result &&
-    result.winner !== humanColor;
-
+  const youWon = humanColor && 'winner' in result && result.winner === humanColor;
+  const youLost = humanColor && 'winner' in result && result.winner !== humanColor;
   const titleColor = youWon
     ? 'text-[var(--accent)]'
     : youLost
     ? 'text-[var(--danger)]'
     : 'text-[var(--foreground-strong)]';
+
+  const { w: whiteNags, b: blackNags } = countNagsByColor(nags);
+
+  const nagRows: { type: NagType; label: string }[] = [
+    { type: 'blunder', label: 'Blunders' },
+    { type: 'mistake', label: 'Mistakes' },
+    { type: 'inaccuracy', label: 'Inaccuracies' },
+  ];
 
   return (
     <div
@@ -60,7 +79,7 @@ export default function GameEndModal({
       onClick={onClose}
     >
       <div
-        className="bg-[var(--surface)] border border-[var(--border)] rounded-xl max-w-sm w-full overflow-hidden shadow-2xl"
+        className="bg-[var(--surface)] border border-[var(--border)] rounded-xl max-w-sm w-full overflow-hidden shadow-2xl relative"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -94,6 +113,47 @@ export default function GameEndModal({
                 {blackAccuracy !== null ? `${blackAccuracy.toFixed(1)}%` : '—'}
               </div>
               <div className="text-[10px] text-[var(--muted)]">accuracy</div>
+            </div>
+          </div>
+        )}
+
+        {/* NAG summary */}
+        {nags.length > 0 && (
+          <div className="px-6 pb-4">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted)] mb-2 text-center">
+              Move quality
+            </div>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 gap-y-1 text-xs">
+              <span />
+              <span className="text-[var(--muted)] text-center">W</span>
+              <span className="text-[var(--muted)] text-center">B</span>
+              {nagRows.map((row) => (
+                <div key={row.type} className="contents">
+                  <span className="flex items-center gap-1">
+                    <span
+                      className="inline-block w-2 h-2 rounded-full"
+                      style={{ background: NAG_META[row.type].color }}
+                    />
+                    <span className="text-[var(--foreground)]">{row.label}</span>
+                  </span>
+                  <span
+                    className="text-center font-mono"
+                    style={{
+                      color: whiteNags[row.type] ? NAG_META[row.type].color : 'var(--muted)',
+                    }}
+                  >
+                    {whiteNags[row.type] || 0}
+                  </span>
+                  <span
+                    className="text-center font-mono"
+                    style={{
+                      color: blackNags[row.type] ? NAG_META[row.type].color : 'var(--muted)',
+                    }}
+                  >
+                    {blackNags[row.type] || 0}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         )}

@@ -1,0 +1,151 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import ThemeToggle from '@/components/ThemeToggle';
+import { Volume2, Palette, Square } from 'lucide-react';
+
+const BOARD_THEMES = [
+  { id: 'brown', label: 'Brown', light: '#f0d9b5', dark: '#b58863' },
+  { id: 'blue', label: 'Blue', light: '#dee3e6', dark: '#8ca2ad' },
+  { id: 'green', label: 'Green', light: '#eeeed2', dark: '#769656' },
+  { id: 'purple', label: 'Purple', light: '#ede0ff', dark: '#7d5ba6' },
+];
+
+const PIECE_SETS = [
+  { id: 'default', label: 'Cburnett (default)' },
+  { id: 'merida', label: 'Merida' },
+];
+
+export default function SettingsPage() {
+  const [boardTheme, setBoardTheme] = useState('brown');
+  const [pieceSet, setPieceSet] = useState('default');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  useEffect(() => {
+    setBoardTheme(localStorage.getItem('boardTheme') || 'brown');
+    setPieceSet(localStorage.getItem('pieceSet') || 'default');
+    setSoundEnabled(localStorage.getItem('soundEnabled') !== 'false');
+  }, []);
+
+  function update<T>(key: string, value: T, setter: (v: T) => void) {
+    setter(value);
+    localStorage.setItem(key, String(value));
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 space-y-6">
+      <h1 className="text-xl font-bold">Settings</h1>
+
+      {/* Appearance */}
+      <section className="space-y-3">
+        <h2 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] border-b border-[var(--border)] pb-1">
+          Appearance
+        </h2>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <Palette size={16} className="text-[var(--muted)]" />
+            <span>Theme</span>
+          </div>
+          <ThemeToggle variant="full" />
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Square size={16} className="text-[var(--muted)]" />
+            <span>Board</span>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {BOARD_THEMES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => update('boardTheme', t.id, setBoardTheme)}
+                className={`rounded border-2 overflow-hidden transition-colors ${
+                  boardTheme === t.id ? 'border-[var(--accent)]' : 'border-[var(--border)]'
+                }`}
+              >
+                <div className="grid grid-cols-2 grid-rows-2 h-16">
+                  <div style={{ background: t.light }} />
+                  <div style={{ background: t.dark }} />
+                  <div style={{ background: t.dark }} />
+                  <div style={{ background: t.light }} />
+                </div>
+                <div className="text-xs text-center py-1 bg-[var(--surface)]">{t.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[var(--muted)] text-lg leading-none">♞</span>
+            <span>Piece set</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {PIECE_SETS.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => update('pieceSet', s.id, setPieceSet)}
+                className={`rounded border-2 p-2 text-sm transition-colors ${
+                  pieceSet === s.id
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                    : 'border-[var(--border)] hover:border-[var(--muted)]'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-[var(--muted)] mt-2">
+            The Merida piece set is coming in a future update.
+          </p>
+        </div>
+      </section>
+
+      {/* Audio */}
+      <section className="space-y-3">
+        <h2 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] border-b border-[var(--border)] pb-1">
+          Audio
+        </h2>
+        <label className="flex items-center justify-between gap-4 cursor-pointer">
+          <span className="flex items-center gap-2">
+            <Volume2 size={16} className="text-[var(--muted)]" />
+            Move sounds
+          </span>
+          <input
+            type="checkbox"
+            checked={soundEnabled}
+            onChange={(e) => update('soundEnabled', e.target.checked, setSoundEnabled)}
+            className="w-4 h-4 accent-[var(--accent)]"
+          />
+        </label>
+      </section>
+
+      {/* Keyboard shortcuts */}
+      <section className="space-y-2">
+        <h2 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] border-b border-[var(--border)] pb-1">
+          Keyboard shortcuts
+        </h2>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+          {[
+            ['← →', 'Navigate moves'],
+            ['Home / End', 'Jump to start/end'],
+            ['F', 'Flip board'],
+            ['N', 'New game'],
+            ['U', 'Undo'],
+            ['R', 'Resign'],
+            ['S', 'Save game'],
+            ['X', 'Copy PGN'],
+            ['I', 'Import PGN'],
+            ['Esc', 'Cancel premove / close'],
+          ].map(([key, desc]) => (
+            <div key={key} className="flex justify-between">
+              <kbd className="font-mono text-xs bg-[var(--surface-2)] px-1.5 py-0.5 rounded">{key}</kbd>
+              <span className="text-[var(--muted)]">{desc}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}

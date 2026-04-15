@@ -1,3 +1,9 @@
+export interface PlyEval {
+  score: number; // centipawns from white's perspective
+  mate: number | null;
+  depth: number;
+}
+
 // Convert centipawn eval (white's perspective) to white win percentage
 export function cpToWinPercent(cp: number, mate: number | null = null): number {
   if (mate !== null) return mate > 0 ? 100 : 0;

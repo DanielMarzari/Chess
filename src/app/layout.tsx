@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import Script from 'next/script';
-import ThemeToggle from '@/components/ThemeToggle';
+import { Settings as SettingsIcon } from 'lucide-react';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,7 +9,6 @@ export const metadata: Metadata = {
   description: 'Chess training and analysis',
 };
 
-// Before-hydration script: apply stored theme immediately to avoid FOUC
 const themeInitScript = `
 (function() {
   try {
@@ -41,11 +40,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <div className="h-4 w-px bg-[var(--border)] mx-2" />
             <NavLink href="/">Play</NavLink>
+            <NavLink href="/study">Study</NavLink>
             <NavLink href="/games">Games</NavLink>
             <NavLink href="/puzzles">Puzzles</NavLink>
-            <div className="ml-auto">
-              <ThemeToggle />
-            </div>
+            <Link
+              href="/settings"
+              title="Settings"
+              className="ml-auto px-2 py-1.5 text-[var(--muted)] hover:text-[var(--foreground-strong)] hover:bg-[var(--surface-2)] rounded transition-colors"
+            >
+              <SettingsIcon size={16} />
+            </Link>
           </div>
         </nav>
         <main>{children}</main>

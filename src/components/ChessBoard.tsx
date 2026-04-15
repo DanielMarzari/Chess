@@ -1,8 +1,15 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess, type Square } from 'chess.js';
+
+const BOARD_THEMES: Record<string, { light: string; dark: string }> = {
+  brown: { light: '#f0d9b5', dark: '#b58863' },
+  blue: { light: '#dee3e6', dark: '#8ca2ad' },
+  green: { light: '#eeeed2', dark: '#769656' },
+  purple: { light: '#ede0ff', dark: '#7d5ba6' },
+};
 
 interface ChessBoardProps {
   position: string;
@@ -12,7 +19,7 @@ interface ChessBoardProps {
   showCoords?: boolean;
   showLegalMoves?: boolean;
   lastMove?: { from: string; to: string } | null;
-  premove?: { from: string; to: string } | null;
+  premoves?: { from: string; to: string }[];
   externalArrow?: { from: Square; to: Square; color?: string } | null;
 }
 
@@ -24,18 +31,31 @@ export default function ChessBoard({
   showCoords = true,
   showLegalMoves = true,
   lastMove,
-  premove,
+  premoves,
   externalArrow,
 }: ChessBoardProps) {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
+  const [themeId, setThemeId] = useState('brown');
 
-  // Compute legal-move destinations for the currently selected square
+  useEffect(() => {
+    const t = localStorage.getItem('boardTheme') || 'brown';
+    setThemeId(t);
+    const handler = () => setThemeId(localStorage.getItem('boardTheme') || 'brown');
+    window.addEventListener('storage', handler);
+    window.addEventListener('focus', handler);
+    return () => {
+      window.removeEventListener('storage', handler);
+      window.removeEventListener('focus', handler);
+    };
+  }, []);
+
+  const theme = BOARD_THEMES[themeId] || BOARD_THEMES.brown;
+
   const legalMoves = useMemo(() => {
     if (!selectedSquare || !showLegalMoves) return [];
     try {
       const g = new Chess(position);
-      const moves = g.moves({ square: selectedSquare as Square, verbose: true });
-      return moves.map((m) => m.to as string);
+      return g.moves({ square: selectedSquare as Square, verbose: true }).map((m) => m.to as string);
     } catch {
       return [];
     }
@@ -44,21 +64,15 @@ export default function ChessBoard({
   const handleSquareClick = useCallback(
     (square: string) => {
       if (!showLegalMoves) return;
-      // If a square is selected and user clicks a legal destination, make the move
       if (selectedSquare && legalMoves.includes(square)) {
         const result = onPieceDrop(selectedSquare, square);
         setSelectedSquare(null);
         return result;
       }
-      // Otherwise try to select a piece on this square
       try {
         const g = new Chess(position);
         const piece = g.get(square as Square);
-        if (piece) {
-          setSelectedSquare(square === selectedSquare ? null : square);
-        } else {
-          setSelectedSquare(null);
-        }
+        setSelectedSquare(piece ? (square === selectedSquare ? null : square) : null);
       } catch {
         setSelectedSquare(null);
       }
@@ -66,31 +80,27 @@ export default function ChessBoard({
     [selectedSquare, legalMoves, onPieceDrop, position, showLegalMoves]
   );
 
-  // Build customSquareStyles
   const customSquareStyles = useMemo(() => {
     const styles: Record<string, React.CSSProperties> = {};
 
-    // Last move — yellow tint
     if (lastMove) {
       styles[lastMove.from] = { ...styles[lastMove.from], background: 'rgba(155, 199, 0, 0.28)' };
       styles[lastMove.to] = { ...styles[lastMove.to], background: 'rgba(155, 199, 0, 0.42)' };
     }
 
-    // Premove — orange tint (overrides last move)
-    if (premove) {
-      styles[premove.from] = { ...styles[premove.from], background: 'rgba(234, 179, 8, 0.55)' };
-      styles[premove.to] = { ...styles[premove.to], background: 'rgba(234, 179, 8, 0.55)' };
+    // Premove stack — later premoves get slightly lighter
+    if (premoves && premoves.length > 0) {
+      premoves.forEach((pm, i) => {
+        const alpha = Math.max(0.35, 0.65 - i * 0.08);
+        styles[pm.from] = { ...styles[pm.from], background: `rgba(234, 179, 8, ${alpha})` };
+        styles[pm.to] = { ...styles[pm.to], background: `rgba(234, 179, 8, ${alpha})` };
+      });
     }
 
-    // Selected square — blue tint
     if (selectedSquare) {
-      styles[selectedSquare] = {
-        ...styles[selectedSquare],
-        background: 'rgba(20, 130, 220, 0.35)',
-      };
+      styles[selectedSquare] = { ...styles[selectedSquare], background: 'rgba(20, 130, 220, 0.35)' };
     }
 
-    // Legal move destinations — dot in the middle
     for (const sq of legalMoves) {
       const existing = styles[sq] || {};
       styles[sq] = {
@@ -102,7 +112,7 @@ export default function ChessBoard({
     }
 
     return styles;
-  }, [selectedSquare, legalMoves, lastMove, premove]);
+  }, [selectedSquare, legalMoves, lastMove, premoves]);
 
   const arrows: [Square, Square, string?][] = externalArrow
     ? [[externalArrow.from, externalArrow.to, externalArrow.color || '#1da198']]
@@ -120,8 +130,8 @@ export default function ChessBoard({
         boardOrientation={boardOrientation}
         boardWidth={boardWidth}
         customBoardStyle={{ borderRadius: '2px' }}
-        customDarkSquareStyle={{ backgroundColor: '#b58863' }}
-        customLightSquareStyle={{ backgroundColor: '#f0d9b5' }}
+        customDarkSquareStyle={{ backgroundColor: theme.dark }}
+        customLightSquareStyle={{ backgroundColor: theme.light }}
         customSquareStyles={customSquareStyles}
         customArrows={arrows as unknown as [Square, Square][]}
         animationDuration={200}
