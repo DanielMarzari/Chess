@@ -1,10 +1,10 @@
 'use client';
 
-import { Play, Users, Bot } from 'lucide-react';
+import { Play, Users, Bot, GraduationCap } from 'lucide-react';
 import { TIME_PRESETS, type TimeControl } from '@/hooks/useClock';
 import type { OpponentColor } from '@/hooks/useStockfish';
 
-export type GameMode = 'cpu' | 'free';
+export type GameMode = 'cpu' | 'free' | 'coach';
 
 const ELO_PRESETS: { label: string; elo: number; title?: boolean }[] = [
   { label: 'Beginner', elo: 800 },
@@ -59,34 +59,53 @@ export default function SetupPanel({
         <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
           Mode
         </label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             onClick={() => onModeChange('cpu')}
-            className={`py-3 px-3 rounded flex items-center justify-center gap-2 transition-colors ${
+            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
               mode === 'cpu'
                 ? 'bg-[var(--accent)] text-white'
                 : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
             }`}
           >
             <Bot size={18} />
-            <span className="text-sm font-semibold">vs Computer</span>
+            <span className="text-xs font-semibold">vs Computer</span>
+          </button>
+          <button
+            onClick={() => onModeChange('coach')}
+            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
+              mode === 'coach'
+                ? 'bg-[var(--accent)] text-white'
+                : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
+            }`}
+          >
+            <GraduationCap size={18} />
+            <span className="text-xs font-semibold">Training</span>
           </button>
           <button
             onClick={() => onModeChange('free')}
-            className={`py-3 px-3 rounded flex items-center justify-center gap-2 transition-colors ${
+            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
               mode === 'free'
                 ? 'bg-[var(--accent)] text-white'
                 : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
             }`}
           >
             <Users size={18} />
-            <span className="text-sm font-semibold">Free Play</span>
+            <span className="text-xs font-semibold">Free Play</span>
           </button>
         </div>
+        {mode === 'coach' && (
+          <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
+            <span className="text-[var(--accent)] font-semibold">Training mode:</span> Play vs the
+            computer with a coach watching over your shoulder. On any inaccuracy, mistake, or
+            blunder, the game pauses. The coach explains what you missed and gives you 3 tries
+            to find a better move before revealing the best one.
+          </p>
+        )}
       </div>
 
-      {/* CPU-specific settings */}
-      {mode === 'cpu' && (
+      {/* CPU-specific settings (also shown for coach mode) */}
+      {(mode === 'cpu' || mode === 'coach') && (
         <>
           <div className="space-y-2">
             <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">

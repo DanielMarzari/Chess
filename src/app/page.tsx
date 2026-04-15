@@ -11,6 +11,7 @@ import CpLossGraph from '@/components/CpLossGraph';
 import SetupPanel, { type GameMode } from '@/components/SetupPanel';
 import GameStatusPanel from '@/components/GameStatusPanel';
 import LiveStats from '@/components/LiveStats';
+import CoachPanel, { type CoachSubPhase } from '@/components/CoachPanel';
 import PgnImport from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
@@ -21,6 +22,7 @@ import { useClock, type TimeControl } from '@/hooks/useClock';
 import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
 import { identifyOpening } from '@/lib/openings';
 import { buildPgn, todayTag } from '@/lib/pgn';
+import { explainMove, type CoachExplanation } from '@/lib/coaching';
 
 const BOARD_WIDTH = 560;
 
@@ -58,6 +60,31 @@ export default function Home() {
   const gameResultShownRef = useRef<string | null>(null);
   const [hoverArrow, setHoverArrow] = useState<{ from: Square; to: Square } | null>(null);
   const [annotating, setAnnotating] = useState<{ index: number; x: number; y: number } | null>(null);
+
+  // ------- Coach state ----------------------------------------------------
+  const [coachSubPhase, setCoachSubPhase] = useState<CoachSubPhase>('analyzing');
+  const [coachActive, setCoachActive] = useState(false);
+  const [coachExplanation, setCoachExplanation] = useState<CoachExplanation | null>(null);
+  const [coachAttemptsLeft, setCoachAttemptsLeft] = useState(3);
+  const [coachBadMoveSan, setCoachBadMoveSan] = useState('');
+  const [coachLastAttemptSan, setCoachLastAttemptSan] = useState<string | null>(null);
+  // The move the user originally made that triggered coaching — we save this in case they hit "Skip"
+  const coachBadMoveUciRef = useRef<string | null>(null);
+  // The FEN BEFORE the bad move (where the user needs to pick again)
+  const coachPreFenRef = useRef<string | null>(null);
+  // Engine's best continuation from preFen (for explanation + reveal)
+  const coachBestMoveUciRef = useRef<string | null>(null);
+  const coachBestPvRef = useRef<string[]>([]);
+  // Engine's best response to the user's bad move (for "why bad")
+  const coachResponsePvRef = useRef<string[]>([]);
+  // Eval snapshots
+  const coachEvalsRef = useRef<{ before: number; afterBad: number }>({ before: 0, afterBad: 0 });
+  // The index in moveHistory where the bad move lives (to splice it out on retry/reveal)
+  const coachBadIndexRef = useRef<number>(-1);
+  // Which side made the bad move (the "student")
+  const coachMoverRef = useRef<'w' | 'b'>('w');
+  // NAGs we've already coached on (moveIndex set) to avoid re-triggering
+  const coachedIndicesRef = useRef<Set<number>>(new Set());
 
   const sf = useStockfish();
   const sound = useSound();
@@ -98,6 +125,200 @@ export default function Home() {
     const fen = positions[currentMoveIndex + 1] || positions[0];
     sf.analyze(fen);
   }, [currentMoveIndex, positions]); // eslint-disable-line
+
+  // ------- Coach trigger --------------------------------------------------
+  // When in coach mode, watch the LAST user move for a bad NAG. When detected,
+  // undo the move and kick off coaching. The computer can't move in the
+  // meantime because cpuToMove is gated on !coachActive.
+  useEffect(() => {
+    if (gamePhase !== 'playing') return;
+    if (committedMode !== 'coach') return;
+    if (coachActive) return;
+    if (moveHistory.length === 0) return;
+    const lastIdx = moveHistory.length - 1;
+    if (coachedIndicesRef.current.has(lastIdx)) return;
+
+    const mover: 'w' | 'b' = lastIdx % 2 === 0 ? 'w' : 'b';
+    // Only coach the HUMAN, not the CPU.
+    if (mover === computerPlays) return;
+
+    const nag = nags[lastIdx];
+    const evalBefore = lastIdx === 0 ? 0 : moveEvals[lastIdx - 1]?.score ?? null;
+    const evalAfter = moveEvals[lastIdx]?.score ?? null;
+    const depthAfter = moveEvals[lastIdx]?.depth ?? 0;
+
+    // Wait for enough depth before deciding; also wait for the engine to be
+    // producing PV lines we can use for explanations.
+    if (evalBefore === null || evalAfter === null || depthAfter < 12) return;
+    if (nag === null) return; // not bad enough
+    if (!['blunder', 'mistake', 'inaccuracy'].includes(nag)) return;
+
+    // We're going to coach. Mark handled.
+    coachedIndicesRef.current.add(lastIdx);
+
+    // Capture the bad move's SAN + UCI, then rewind history by 1.
+    const badSan = moveHistory[lastIdx];
+    // Rebuild to get UCI
+    const replay = new Chess();
+    for (let i = 0; i < lastIdx; i++) {
+      try {
+        replay.move(moveHistory[i]);
+      } catch {
+        return;
+      }
+    }
+    const preFen = replay.fen();
+    let badUci = '';
+    try {
+      const m = replay.move(badSan);
+      if (m) badUci = `${m.from}${m.to}${m.promotion || ''}`;
+    } catch {
+      return;
+    }
+
+    coachBadMoveUciRef.current = badUci;
+    coachPreFenRef.current = preFen;
+    coachEvalsRef.current = { before: evalBefore, afterBad: evalAfter };
+    coachBadIndexRef.current = lastIdx;
+    coachMoverRef.current = mover;
+
+    // Rewind the game state by one ply so the user can try again.
+    const newHistory = moveHistory.slice(0, lastIdx);
+    const newPositions = positions.slice(0, lastIdx + 1);
+    setMoveHistory(newHistory);
+    setPositions(newPositions);
+    setCurrentMoveIndex(newHistory.length - 1);
+    setGame(new Chess(preFen));
+    setMoveEvals((p) => p.slice(0, newHistory.length));
+    setNags((p) => p.slice(0, newHistory.length));
+
+    // Pause the clock while we teach.
+    clockRef.current.pause();
+
+    // Activate coach; explanation will be built once engine analyzes preFen.
+    setCoachActive(true);
+    setCoachSubPhase('analyzing');
+    setCoachExplanation(null);
+    setCoachAttemptsLeft(3);
+    setCoachBadMoveSan(badSan);
+    setCoachLastAttemptSan(null);
+    coachBestMoveUciRef.current = null;
+    coachBestPvRef.current = [];
+    coachResponsePvRef.current = [];
+  }, [gamePhase, committedMode, coachActive, moveHistory, nags, moveEvals, computerPlays, positions]);
+
+  // While coach is active, capture engine's best line from preFen (analysis
+  // is already running because positions/currentMoveIndex changed).
+  useEffect(() => {
+    if (!coachActive) return;
+    if (coachSubPhase !== 'analyzing') return;
+    if (sf.lines.length === 0) return;
+    const primary = sf.lines[0];
+    // Need enough depth to trust the recommendation
+    if (primary.depth < 15) return;
+
+    const pvTokens = primary.pv.trim().split(/\s+/).filter(Boolean);
+    if (pvTokens.length === 0) return;
+
+    const bestUci = pvTokens[0];
+    coachBestMoveUciRef.current = bestUci;
+    coachBestPvRef.current = pvTokens;
+
+    // Compute engine's response PV from post-bad-move position (to explain "why bad").
+    // We analyze that separately inline — we can compute it lazily by
+    // instantiating a Chess object and using the main analysis' PV that exists
+    // before we rewound. Simpler: use the captured eval and rely on heuristics
+    // that inspect the post-bad FEN directly.
+    const preFen = coachPreFenRef.current!;
+    const badUci = coachBadMoveUciRef.current!;
+    const postBadFen = (() => {
+      const g = new Chess(preFen);
+      try {
+        g.move({
+          from: badUci.slice(0, 2),
+          to: badUci.slice(2, 4),
+          promotion: badUci.slice(4, 5) || 'q',
+        });
+      } catch {
+        return preFen;
+      }
+      return g.fen();
+    })();
+
+    // Translate best UCI to SAN
+    const bestGame = new Chess(preFen);
+    let bestSan = '';
+    try {
+      const m = bestGame.move({
+        from: bestUci.slice(0, 2),
+        to: bestUci.slice(2, 4),
+        promotion: bestUci.slice(4, 5) || 'q',
+      });
+      if (m) bestSan = m.san;
+    } catch {
+      bestSan = bestUci;
+    }
+
+    // We don't have a direct PV from post-bad FEN, but we can infer the
+    // opponent's best reply from the evaluation drop + standard heuristics.
+    // For v1, pass an empty response PV — the heuristic will fall back to
+    // eval-based commentary. (Future: run a second short analysis on postBadFen.)
+    const explanation = explainMove({
+      preMoveFen: preFen,
+      badMoveSan: coachBadMoveSan,
+      badMoveUci: badUci,
+      bestMoveSan: bestSan,
+      bestMoveUci: bestUci,
+      bestPvUci: pvTokens,
+      responsePvUci: coachResponsePvRef.current,
+      evalBeforeCp: coachEvalsRef.current.before,
+      evalAfterBadCp: coachEvalsRef.current.afterBad,
+      mover: coachMoverRef.current,
+      nag: nags[coachBadIndexRef.current] ?? 'blunder',
+    });
+
+    // Lightweight refutation heuristic: find the most valuable capture the
+    // opponent has available in postBadFen (so "why bad" can say "Black takes
+    // your rook for free"). Uses only chess.js, no engine call.
+    try {
+      const post = new Chess(postBadFen);
+      const moves = post.moves({ verbose: true }) as Array<{
+        from: string;
+        to: string;
+        flags: string;
+        captured?: string;
+      }>;
+      const captures = moves.filter((m) => m.flags.includes('c') || m.flags.includes('e'));
+      if (captures.length > 0) {
+        const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+        captures.sort((a, b) => (values[b.captured || 'p'] || 0) - (values[a.captured || 'p'] || 0));
+        const best = captures[0];
+        coachResponsePvRef.current = [`${best.from}${best.to}`];
+      }
+    } catch {
+      // ignore
+    }
+
+    // Rebuild the explanation now that we have a refutation hint.
+    const finalExplanation = explainMove({
+      preMoveFen: preFen,
+      badMoveSan: coachBadMoveSan,
+      badMoveUci: badUci,
+      bestMoveSan: bestSan,
+      bestMoveUci: bestUci,
+      bestPvUci: pvTokens,
+      responsePvUci: coachResponsePvRef.current,
+      evalBeforeCp: coachEvalsRef.current.before,
+      evalAfterBadCp: coachEvalsRef.current.afterBad,
+      mover: coachMoverRef.current,
+      nag: nags[coachBadIndexRef.current] ?? 'blunder',
+    });
+
+    setCoachExplanation(finalExplanation);
+    setCoachSubPhase('explain');
+    void explanation; // silence unused intermediate
+    void postBadFen;
+  }, [coachActive, coachSubPhase, sf.lines, coachBadMoveSan, nags]);
 
   // Capture live eval into moveEvals
   useEffect(() => {
@@ -217,7 +438,8 @@ export default function Home() {
 
   const cpuToMove =
     gamePhase === 'playing' &&
-    committedMode === 'cpu' &&
+    (committedMode === 'cpu' || committedMode === 'coach') &&
+    !coachActive &&
     !!computerPlays &&
     currentMoveIndex === moveHistory.length - 1 &&
     game.turn() === computerPlays &&
@@ -242,12 +464,54 @@ export default function Home() {
   }, [currentFenForEngine, applyMove]);
 
   // Board drop handler — blocked unless in playing phase
+  // In coach mode, drops during coaching are routed through the retry validator.
   const onPieceDrop = useCallback(
     (source: string, target: string): boolean => {
       if (gamePhase !== 'playing') return false;
+
+      if (coachActive && (coachSubPhase === 'explain' || coachSubPhase === 'retry-wrong')) {
+        // User is trying to find a better move
+        const preFen = coachPreFenRef.current;
+        const bestUci = coachBestMoveUciRef.current;
+        if (!preFen || !bestUci) return false;
+
+        // Validate the move is legal in preFen
+        const tryGame = new Chess(preFen);
+        let tried;
+        try {
+          tried = tryGame.move({ from: source, to: target, promotion: 'q' });
+        } catch {
+          return false;
+        }
+        if (!tried) return false;
+
+        const triedUci = `${tried.from}${tried.to}${tried.promotion || ''}`;
+        const isExact = triedUci === bestUci;
+
+        if (isExact) {
+          // Correct! Apply the move.
+          soundRef.current.play('victory');
+          applyMove(source, target, 'q');
+          setCoachLastAttemptSan(tried.san);
+          setCoachSubPhase('retry-correct');
+        } else {
+          // Wrong — decrement attempts, keep board at preFen
+          soundRef.current.play('move');
+          const remaining = coachAttemptsLeft - 1;
+          setCoachAttemptsLeft(remaining);
+          setCoachLastAttemptSan(tried.san);
+          if (remaining <= 0) {
+            setCoachSubPhase('reveal');
+          } else {
+            setCoachSubPhase('retry-wrong');
+          }
+        }
+        return false; // visually snap back; we handled via applyMove if correct
+      }
+
       return applyMove(source, target);
     },
-    [applyMove, gamePhase]
+    [applyMove, gamePhase, coachActive, coachSubPhase, coachAttemptsLeft]
   );
 
   // Game-end detection — transitions phase to 'ended'
@@ -334,7 +598,8 @@ export default function Home() {
     if (gamePhase !== 'playing') return;
     sf.cancelMove();
     boardRef.current?.clearPremoves();
-    const undoCount = committedMode === 'cpu' && moveHistory.length >= 2 ? 2 : 1;
+    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
+    const undoCount = vsCpu && moveHistory.length >= 2 ? 2 : 1;
     const newHistory = moveHistory.slice(0, -undoCount);
     const newPositions = positions.slice(0, -undoCount);
     const fen = newPositions[newPositions.length - 1];
@@ -394,12 +659,11 @@ export default function Home() {
   }, [importPgn]);
 
   const getPgnMeta = useCallback(() => {
-    const white =
-      committedMode === 'cpu' && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
-    const black =
-      committedMode === 'cpu' && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
+    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
+    const white = vsCpu && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
+    const black = vsCpu && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
     return {
-      event: committedMode === 'cpu' ? 'vs Computer' : 'Casual Game',
+      event: committedMode === 'coach' ? 'Training Game' : vsCpu ? 'vs Computer' : 'Casual Game',
       site: 'chess.danmarzari.com',
       date: todayTag(),
       white,
@@ -436,7 +700,8 @@ export default function Home() {
   }, [moveHistory, getPgnMeta, showToast]);
 
   const handleResign = useCallback(() => {
-    if (gamePhase !== 'playing' || committedMode !== 'cpu' || !computerPlays) return;
+    if (gamePhase !== 'playing' || !computerPlays) return;
+    if (committedMode !== 'cpu' && committedMode !== 'coach') return;
     sound.play('defeat');
     clock.stop();
     setGameResult({ type: 'resign', winner: computerPlays });
@@ -450,6 +715,81 @@ export default function Home() {
       document.exitFullscreen?.().catch(() => {});
     }
   }, []);
+
+  // ------- Coach actions --------------------------------------------------
+  const dismissCoach = useCallback(() => {
+    setCoachActive(false);
+    setCoachSubPhase('analyzing');
+    setCoachExplanation(null);
+    setCoachLastAttemptSan(null);
+    coachBadMoveUciRef.current = null;
+    coachPreFenRef.current = null;
+    coachBestMoveUciRef.current = null;
+    coachBestPvRef.current = [];
+    coachResponsePvRef.current = [];
+    coachBadIndexRef.current = -1;
+    // Resume the clock so the CPU's turn can run out normally
+    clockRef.current.resume();
+  }, []);
+
+  // Skip: keep the original bad move, proceed normally
+  const coachSkip = useCallback(() => {
+    const preFen = coachPreFenRef.current;
+    const badUci = coachBadMoveUciRef.current;
+    if (!preFen || !badUci) {
+      dismissCoach();
+      return;
+    }
+    // Re-apply the original move
+    const tryGame = new Chess(preFen);
+    try {
+      const m = tryGame.move({
+        from: badUci.slice(0, 2),
+        to: badUci.slice(2, 4),
+        promotion: badUci.slice(4, 5) || 'q',
+      });
+      if (m) {
+        applyMove(m.from, m.to, m.promotion || 'q');
+      }
+    } catch {
+      // ignore
+    }
+    dismissCoach();
+  }, [applyMove, dismissCoach]);
+
+  // Show solution: apply the engine's best move and proceed
+  const coachShowSolution = useCallback(() => {
+    const preFen = coachPreFenRef.current;
+    const bestUci = coachBestMoveUciRef.current;
+    if (!preFen || !bestUci) {
+      setCoachSubPhase('reveal');
+      return;
+    }
+    setCoachSubPhase('reveal');
+  }, []);
+
+  // Continue (after reveal or correct answer)
+  const coachContinue = useCallback(() => {
+    // If we're in 'reveal', apply the engine's best move now
+    if (coachSubPhase === 'reveal') {
+      const preFen = coachPreFenRef.current;
+      const bestUci = coachBestMoveUciRef.current;
+      if (preFen && bestUci) {
+        const g = new Chess(preFen);
+        try {
+          const m = g.move({
+            from: bestUci.slice(0, 2),
+            to: bestUci.slice(2, 4),
+            promotion: bestUci.slice(4, 5) || 'q',
+          });
+          if (m) applyMove(m.from, m.to, m.promotion || 'q');
+        } catch {
+          // ignore
+        }
+      }
+    }
+    dismissCoach();
+  }, [coachSubPhase, applyMove, dismissCoach]);
 
   const saveAnnotation = useCallback((idx: number, value: string) => {
     setAnnotations((prev) => {
@@ -512,7 +852,21 @@ export default function Home() {
   const primaryScore = sf.lines[0]?.score ?? null;
   const primaryMate = sf.lines[0]?.mate ?? null;
 
-  const allowPremoves = gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays;
+  const allowPremoves =
+    gamePhase === 'playing' &&
+    (committedMode === 'cpu' || committedMode === 'coach') &&
+    !coachActive &&
+    !!computerPlays;
+
+  // When reveal phase shows the best move, overlay an arrow on the board
+  const coachArrow: { from: Square; to: Square; color?: string } | null =
+    coachActive && coachSubPhase === 'reveal' && coachBestMoveUciRef.current
+      ? {
+          from: coachBestMoveUciRef.current.slice(0, 2) as Square,
+          to: coachBestMoveUciRef.current.slice(2, 4) as Square,
+          color: '#759900',
+        }
+      : hoverArrow;
 
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
@@ -553,7 +907,7 @@ export default function Home() {
             boardWidth={BOARD_WIDTH}
             showCoords={showCoords}
             lastMove={lastMove}
-            externalArrow={hoverArrow}
+            externalArrow={coachArrow}
             allowPremoves={allowPremoves}
           />
 
@@ -571,7 +925,7 @@ export default function Home() {
               <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-[var(--foreground-strong)]">{status}</span>
                 <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                  {committedMode === 'cpu' && computerPlays && (
+                  {(committedMode === 'cpu' || committedMode === 'coach') && computerPlays && (
                     <span>
                       You: {computerPlays === 'w' ? '● Black' : '○ White'}
                       <span className="mx-2 text-[var(--border)]">|</span>
@@ -642,6 +996,18 @@ export default function Home() {
             />
           ) : (
             <>
+              {coachActive && (
+                <CoachPanel
+                  subPhase={coachSubPhase}
+                  explanation={coachExplanation}
+                  attemptsLeft={coachAttemptsLeft}
+                  badMoveSan={coachBadMoveSan}
+                  lastAttemptSan={coachLastAttemptSan}
+                  onSkip={coachSkip}
+                  onShowSolution={coachShowSolution}
+                  onContinue={coachContinue}
+                />
+              )}
               <GameStatusPanel
                 mode={committedMode}
                 cpuColor={computerPlays}
@@ -650,7 +1016,12 @@ export default function Home() {
                 isCpuThinking={sf.isComputerThinking}
                 onQuit={backToSetup}
                 onResign={handleResign}
-                canResign={gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays}
+                canResign={
+                  gamePhase === 'playing' &&
+                  (committedMode === 'cpu' || committedMode === 'coach') &&
+                  !!computerPlays &&
+                  !coachActive
+                }
                 phase={gamePhase}
               />
               <EngineAnalysis
@@ -693,7 +1064,11 @@ export default function Home() {
                 canUndo={moveHistory.length > 0 && gamePhase === 'playing'}
                 canGoBack={currentMoveIndex > -1}
                 canGoForward={currentMoveIndex < moveHistory.length - 1}
-                canResign={gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays}
+                canResign={
+                  gamePhase === 'playing' &&
+                  (committedMode === 'cpu' || committedMode === 'coach') &&
+                  !!computerPlays
+                }
               />
             </>
           )}
@@ -704,7 +1079,11 @@ export default function Home() {
 
       <GameEndModal
         result={gameResult}
-        humanColor={committedMode === 'cpu' && computerPlays ? (computerPlays === 'w' ? 'b' : 'w') : null}
+        humanColor={
+          (committedMode === 'cpu' || committedMode === 'coach') && computerPlays
+            ? computerPlays === 'w' ? 'b' : 'w'
+            : null
+        }
         whiteAccuracy={whiteAcc}
         blackAccuracy={blackAcc}
         nags={nags}

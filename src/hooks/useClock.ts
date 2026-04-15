@@ -57,6 +57,20 @@ export function useClock(onFlag?: (color: 'w' | 'b') => void) {
     setState((s) => ({ ...s, running: false, activeColor: null }));
   }, []);
 
+  // Temporarily freeze the active clock (used by coach mode so the clock
+  // doesn't tick while the student is thinking through a lesson).
+  // Resume returns control to whichever side was active.
+  const pause = useCallback(() => {
+    setState((s) => (s.running ? { ...s, running: false } : s));
+  }, []);
+
+  const resume = useCallback(() => {
+    setState((s) => {
+      if (s.flagged || !s.activeColor) return s;
+      return { ...s, running: true };
+    });
+  }, []);
+
   const disable = useCallback(() => {
     setTc(null);
     setState({ white: 0, black: 0, activeColor: null, running: false, flagged: null });
@@ -111,7 +125,7 @@ export function useClock(onFlag?: (color: 'w' | 'b') => void) {
     };
   }, [state.running, state.activeColor, state.flagged, onFlag]);
 
-  return { tc, state, start, stop, disable, pressMove };
+  return { tc, state, start, stop, pause, resume, disable, pressMove };
 }
 
 export function formatTime(seconds: number): string {
