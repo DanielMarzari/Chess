@@ -138,9 +138,8 @@ export default function Home() {
     const lastIdx = moveHistory.length - 1;
     if (coachedIndicesRef.current.has(lastIdx)) return;
 
+    // Hot-seat coach mode watches both sides — trigger on any bad move.
     const mover: 'w' | 'b' = lastIdx % 2 === 0 ? 'w' : 'b';
-    // Only coach the HUMAN, not the CPU.
-    if (mover === computerPlays) return;
 
     const nag = nags[lastIdx];
     const evalBefore = lastIdx === 0 ? 0 : moveEvals[lastIdx - 1]?.score ?? null;
@@ -436,9 +435,10 @@ export default function Home() {
   const requestMoveRef = useRef(sf.requestMove);
   requestMoveRef.current = sf.requestMove;
 
+  // Only 'cpu' mode has an automatic computer opponent. Coach mode is hot-seat.
   const cpuToMove =
     gamePhase === 'playing' &&
-    (committedMode === 'cpu' || committedMode === 'coach') &&
+    committedMode === 'cpu' &&
     !coachActive &&
     !!computerPlays &&
     currentMoveIndex === moveHistory.length - 1 &&
@@ -549,7 +549,8 @@ export default function Home() {
     sf.cancelMove();
     boardRef.current?.clearPremoves();
 
-    // Commit draft settings to the engine + clock
+    // Commit draft settings to the engine + clock.
+    // Coach mode is hot-seat (no CPU opponent).
     if (draftMode === 'cpu') {
       if (!sf.opponentEnabled) sf.toggleOpponent();
       sf.setOpponentColor(draftCpuColor);
@@ -598,8 +599,7 @@ export default function Home() {
     if (gamePhase !== 'playing') return;
     sf.cancelMove();
     boardRef.current?.clearPremoves();
-    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
-    const undoCount = vsCpu && moveHistory.length >= 2 ? 2 : 1;
+    const undoCount = committedMode === 'cpu' && moveHistory.length >= 2 ? 2 : 1;
     const newHistory = moveHistory.slice(0, -undoCount);
     const newPositions = positions.slice(0, -undoCount);
     const fen = newPositions[newPositions.length - 1];
@@ -659,7 +659,7 @@ export default function Home() {
   }, [importPgn]);
 
   const getPgnMeta = useCallback(() => {
-    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
+    const vsCpu = committedMode === 'cpu';
     const white = vsCpu && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
     const black = vsCpu && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
     return {
@@ -700,8 +700,9 @@ export default function Home() {
   }, [moveHistory, getPgnMeta, showToast]);
 
   const handleResign = useCallback(() => {
-    if (gamePhase !== 'playing' || !computerPlays) return;
-    if (committedMode !== 'cpu' && committedMode !== 'coach') return;
+    // Resign only applies when there's a CPU opponent. In coach mode (hot-seat)
+    // there's no one to resign to.
+    if (gamePhase !== 'playing' || committedMode !== 'cpu' || !computerPlays) return;
     sound.play('defeat');
     clock.stop();
     setGameResult({ type: 'resign', winner: computerPlays });
@@ -852,9 +853,10 @@ export default function Home() {
   const primaryScore = sf.lines[0]?.score ?? null;
   const primaryMate = sf.lines[0]?.mate ?? null;
 
+  // Premoves only make sense when there's a CPU to move between your moves.
   const allowPremoves =
     gamePhase === 'playing' &&
-    (committedMode === 'cpu' || committedMode === 'coach') &&
+    committedMode === 'cpu' &&
     !coachActive &&
     !!computerPlays;
 
@@ -925,7 +927,7 @@ export default function Home() {
               <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-[var(--foreground-strong)]">{status}</span>
                 <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                  {(committedMode === 'cpu' || committedMode === 'coach') && computerPlays && (
+                  {committedMode === 'cpu' && computerPlays && (
                     <span>
                       You: {computerPlays === 'w' ? '● Black' : '○ White'}
                       <span className="mx-2 text-[var(--border)]">|</span>
@@ -1018,7 +1020,7 @@ export default function Home() {
                 onResign={handleResign}
                 canResign={
                   gamePhase === 'playing' &&
-                  (committedMode === 'cpu' || committedMode === 'coach') &&
+                  committedMode === 'cpu' &&
                   !!computerPlays &&
                   !coachActive
                 }
@@ -1064,11 +1066,7 @@ export default function Home() {
                 canUndo={moveHistory.length > 0 && gamePhase === 'playing'}
                 canGoBack={currentMoveIndex > -1}
                 canGoForward={currentMoveIndex < moveHistory.length - 1}
-                canResign={
-                  gamePhase === 'playing' &&
-                  (committedMode === 'cpu' || committedMode === 'coach') &&
-                  !!computerPlays
-                }
+                canResign={gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays}
               />
             </>
           )}
@@ -1080,7 +1078,7 @@ export default function Home() {
       <GameEndModal
         result={gameResult}
         humanColor={
-          (committedMode === 'cpu' || committedMode === 'coach') && computerPlays
+          committedMode === 'cpu' && computerPlays
             ? computerPlays === 'w' ? 'b' : 'w'
             : null
         }

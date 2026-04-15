@@ -96,16 +96,17 @@ export default function SetupPanel({
         </div>
         {mode === 'coach' && (
           <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
-            <span className="text-[var(--accent)] font-semibold">Training mode:</span> Play vs the
-            computer with a coach watching over your shoulder. On any inaccuracy, mistake, or
-            blunder, the game pauses. The coach explains what you missed and gives you 3 tries
-            to find a better move before revealing the best one.
+            <span className="text-[var(--accent)] font-semibold">Training mode:</span> Hot-seat
+            play — you (or two people) control both sides. The coach watches every move; on any
+            inaccuracy, mistake, or blunder the game pauses, the coach explains what you missed,
+            and you get 3 tries to find a better move before the best one is revealed. No CPU
+            opponent.
           </p>
         )}
       </div>
 
-      {/* CPU-specific settings (also shown for coach mode) */}
-      {(mode === 'cpu' || mode === 'coach') && (
+      {/* CPU-specific settings (only for vs-computer mode) */}
+      {mode === 'cpu' && (
         <>
           <div className="space-y-2">
             <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
