@@ -8,13 +8,13 @@ import GameControls from '@/components/GameControls';
 import EngineAnalysis from '@/components/EngineAnalysis';
 import EvalBar from '@/components/EvalBar';
 import CpLossGraph from '@/components/CpLossGraph';
-import OpponentPanel from '@/components/OpponentPanel';
+import SetupPanel, { type GameMode } from '@/components/SetupPanel';
+import GameStatusPanel from '@/components/GameStatusPanel';
 import PgnImport from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
-import TimeControlPicker from '@/components/TimeControlPicker';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
 import AnnotationEditor from '@/components/AnnotationEditor';
-import { useStockfish } from '@/hooks/useStockfish';
+import { useStockfish, type OpponentColor } from '@/hooks/useStockfish';
 import { useSound } from '@/hooks/useSound';
 import { useClock, type TimeControl } from '@/hooks/useClock';
 import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
@@ -23,7 +23,22 @@ import { buildPgn, todayTag } from '@/lib/pgn';
 
 const BOARD_WIDTH = 560;
 
+type GamePhase = 'setup' | 'playing' | 'ended';
+
 export default function Home() {
+  // Game phase — controls the entire lifecycle
+  const [gamePhase, setGamePhase] = useState<GamePhase>('setup');
+
+  // Draft settings — edited in setup phase, committed on Start
+  const [draftMode, setDraftMode] = useState<GameMode>('cpu');
+  const [draftCpuColor, setDraftCpuColor] = useState<OpponentColor>('black');
+  const [draftCpuElo, setDraftCpuElo] = useState(1500);
+  const [draftTc, setDraftTc] = useState<TimeControl | null>(null);
+
+  // Committed game settings (locked after Start)
+  const [committedMode, setCommittedMode] = useState<GameMode>('free');
+
+  // Game state
   const [game, setGame] = useState(new Chess());
   const [boardOrientation, setBoardOrientation] = useState<'white' | 'black'>('white');
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
@@ -50,6 +65,7 @@ export default function Home() {
     (color: 'w' | 'b') => {
       sound.play('defeat');
       setGameResult({ type: 'timeout', winner: color === 'w' ? 'b' : 'w' });
+      setGamePhase('ended');
     },
     [sound]
   );
@@ -60,6 +76,7 @@ export default function Home() {
     setTimeout(() => setToast(null), 1800);
   }, []);
 
+  // Status line
   const updateStatus = useCallback((g: Chess) => {
     if (g.isCheckmate()) setStatus(`Checkmate — ${g.turn() === 'w' ? 'Black' : 'White'} wins`);
     else if (g.isDraw()) {
@@ -75,7 +92,7 @@ export default function Home() {
     updateStatus(game);
   }, [game, updateStatus]);
 
-  // Engine analysis on position change
+  // Engine analysis on position change (always on, regardless of phase)
   useEffect(() => {
     const fen = positions[currentMoveIndex + 1] || positions[0];
     sf.analyze(fen);
@@ -136,31 +153,13 @@ export default function Home() {
 
   const opening = useMemo(() => identifyOpening(moveHistory), [moveHistory]);
 
-  // A game is "in progress" once moves have been made and it hasn't ended.
-  // While in progress, time controls and ELO are locked to prevent mid-game changes.
-  const gameInProgress = moveHistory.length > 0 && !game.isGameOver();
-
-  // Resolve opponent color
+  // Auto-flip board to human's perspective
   useEffect(() => {
-    if (!sf.opponentEnabled) {
-      setComputerPlays(null);
-      return;
-    }
-    setComputerPlays(
-      sf.opponentColor === 'random'
-        ? Math.random() < 0.5 ? 'w' : 'b'
-        : sf.opponentColor === 'white' ? 'w' : 'b'
-    );
-  }, [sf.opponentEnabled, sf.opponentColor]);
-
-  useEffect(() => {
-    if (!sf.opponentEnabled || !computerPlays) return;
+    if (committedMode !== 'cpu' || !computerPlays) return;
     setBoardOrientation(computerPlays === 'w' ? 'black' : 'white');
-  }, [sf.opponentEnabled, computerPlays]);
+  }, [committedMode, computerPlays]);
 
-  // Live refs so callbacks don't need to depend on rapidly-changing state
-  // (the clock ticks every animation frame and would otherwise recreate
-  //  applyMove → restart opponent timer → cancel premoves → flicker UI)
+  // Stable-identity refs so effects don't re-run on clock ticks
   const positionsRef = useRef(positions);
   positionsRef.current = positions;
   const currentMoveIndexRef = useRef(currentMoveIndex);
@@ -170,7 +169,7 @@ export default function Home() {
   const soundRef = useRef(sound);
   soundRef.current = sound;
 
-  // Stable applyMove — only recreated when setters change (which is never)
+  // Apply a move
   const applyMove = useCallback(
     (source: string, target: string, promotion = 'q'): boolean => {
       const idx = currentMoveIndexRef.current;
@@ -211,13 +210,13 @@ export default function Home() {
     []
   );
 
-  // Opponent turn — depends only on primitives that mark "it's CPU's turn"
+  // Opponent turn — only fires during play phase vs CPU
   const requestMoveRef = useRef(sf.requestMove);
   requestMoveRef.current = sf.requestMove;
 
-  // Computed: is the CPU up to move right now at the live position?
   const cpuToMove =
-    !!sf.opponentEnabled &&
+    gamePhase === 'playing' &&
+    committedMode === 'cpu' &&
     !!computerPlays &&
     currentMoveIndex === moveHistory.length - 1 &&
     game.turn() === computerPlays &&
@@ -241,19 +240,18 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [currentFenForEngine, applyMove]);
 
-  // Premoves are handled natively by react-chessboard (arePremovesAllowed):
-  // while it's the opponent's turn, drops are queued internally; when the
-  // opponent moves and it's our turn, the library fires onPieceDrop for the
-  // first premove in sequence. onPieceDrop just tries to apply it; if we
-  // return false, the library clears the whole queue.
-
+  // Board drop handler — blocked unless in playing phase
   const onPieceDrop = useCallback(
-    (source: string, target: string) => applyMove(source, target),
-    [applyMove]
+    (source: string, target: string): boolean => {
+      if (gamePhase !== 'playing') return false;
+      return applyMove(source, target);
+    },
+    [applyMove, gamePhase]
   );
 
-  // Game-end detection
+  // Game-end detection — transitions phase to 'ended'
   useEffect(() => {
+    if (gamePhase !== 'playing') return;
     if (!game.isGameOver() || gameResult) return;
     const key = `${game.fen()}|${moveHistory.length}`;
     if (gameResultShownRef.current === key) return;
@@ -268,7 +266,8 @@ export default function Home() {
 
     clock.stop();
     setGameResult(result);
-  }, [game, gameResult, moveHistory.length, clock]);
+    setGamePhase('ended');
+  }, [gamePhase, game, gameResult, moveHistory.length, clock]);
 
   const goToMove = useCallback(
     (index: number) => {
@@ -280,9 +279,29 @@ export default function Home() {
     [positions]
   );
 
-  const newGame = useCallback(() => {
+  // Start a game with the current draft settings
+  const startGame = useCallback(() => {
     sf.cancelMove();
     boardRef.current?.clearPremoves();
+
+    // Commit draft settings to the engine + clock
+    if (draftMode === 'cpu') {
+      if (!sf.opponentEnabled) sf.toggleOpponent();
+      sf.setOpponentColor(draftCpuColor);
+      sf.setElo(draftCpuElo);
+      setComputerPlays(
+        draftCpuColor === 'random'
+          ? Math.random() < 0.5 ? 'w' : 'b'
+          : draftCpuColor === 'white' ? 'w' : 'b'
+      );
+    } else {
+      if (sf.opponentEnabled) sf.toggleOpponent();
+      setComputerPlays(null);
+    }
+    if (draftTc) clock.start(draftTc);
+    else clock.disable();
+
+    // Reset board
     const g = new Chess();
     setGame(g);
     setMoveHistory([]);
@@ -293,18 +312,28 @@ export default function Home() {
     setAnnotations({});
     setGameResult(null);
     gameResultShownRef.current = null;
-    if (clock.tc) clock.start(clock.tc);
-    else clock.disable();
-    if (sf.opponentEnabled && sf.opponentColor === 'random') {
-      setComputerPlays(Math.random() < 0.5 ? 'w' : 'b');
-    }
+
+    setCommittedMode(draftMode);
+    setGamePhase('playing');
+  }, [sf, clock, draftMode, draftCpuColor, draftCpuElo, draftTc]);
+
+  // Return to setup (quit current game or after game end)
+  const backToSetup = useCallback(() => {
+    sf.cancelMove();
+    boardRef.current?.clearPremoves();
+    clock.stop();
+    clock.disable();
+    setGameResult(null);
+    gameResultShownRef.current = null;
+    setGamePhase('setup');
   }, [sf, clock]);
 
   const undoMove = useCallback(() => {
     if (moveHistory.length === 0) return;
+    if (gamePhase !== 'playing') return;
     sf.cancelMove();
     boardRef.current?.clearPremoves();
-    const undoCount = sf.opponentEnabled && moveHistory.length >= 2 ? 2 : 1;
+    const undoCount = committedMode === 'cpu' && moveHistory.length >= 2 ? 2 : 1;
     const newHistory = moveHistory.slice(0, -undoCount);
     const newPositions = positions.slice(0, -undoCount);
     const fen = newPositions[newPositions.length - 1];
@@ -314,34 +343,46 @@ export default function Home() {
     setCurrentMoveIndex(newHistory.length - 1);
     setMoveEvals((p) => p.slice(0, newHistory.length));
     setNags((p) => p.slice(0, newHistory.length));
-  }, [moveHistory, positions, sf]);
+  }, [moveHistory, positions, sf, gamePhase, committedMode]);
 
-  const importPgn = useCallback((pgn: string) => {
-    const g = new Chess();
-    try {
-      g.loadPgn(pgn);
-    } catch {
-      showToast('Invalid PGN');
-      return;
-    }
-    const history = g.history();
-    const all = [new Chess().fen()];
-    const replay = new Chess();
-    for (const m of history) {
+  const importPgn = useCallback(
+    (pgn: string) => {
+      const g = new Chess();
       try {
-        replay.move(m);
+        g.loadPgn(pgn);
       } catch {
-        break;
+        showToast('Invalid PGN');
+        return;
       }
-      all.push(replay.fen());
-    }
-    setGame(new Chess(all[all.length - 1]));
-    setMoveHistory(history.slice(0, all.length - 1));
-    setPositions(all);
-    setCurrentMoveIndex(all.length - 2);
-    setMoveEvals(Array(all.length - 1).fill(null));
-    setNags(Array(all.length - 1).fill(null));
-  }, [showToast]);
+      const history = g.history();
+      const all = [new Chess().fen()];
+      const replay = new Chess();
+      for (const m of history) {
+        try {
+          replay.move(m);
+        } catch {
+          break;
+        }
+        all.push(replay.fen());
+      }
+      // Imported games are analysis-only (free play mode, no timer, no CPU).
+      if (sf.opponentEnabled) sf.toggleOpponent();
+      clock.disable();
+      setComputerPlays(null);
+      setCommittedMode('free');
+      setGame(new Chess(all[all.length - 1]));
+      setMoveHistory(history.slice(0, all.length - 1));
+      setPositions(all);
+      setCurrentMoveIndex(all.length - 2);
+      setMoveEvals(Array(all.length - 1).fill(null));
+      setNags(Array(all.length - 1).fill(null));
+      setGameResult(null);
+      gameResultShownRef.current = null;
+      // Imported game: skip setup and land straight in playing phase
+      setGamePhase('playing');
+    },
+    [showToast, sf, clock]
+  );
 
   useEffect(() => {
     const pgn = sessionStorage.getItem('loadPgn');
@@ -352,10 +393,12 @@ export default function Home() {
   }, [importPgn]);
 
   const getPgnMeta = useCallback(() => {
-    const white = sf.opponentEnabled && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
-    const black = sf.opponentEnabled && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
+    const white =
+      committedMode === 'cpu' && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
+    const black =
+      committedMode === 'cpu' && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
     return {
-      event: sf.opponentEnabled ? 'vs Computer' : 'Casual Game',
+      event: committedMode === 'cpu' ? 'vs Computer' : 'Casual Game',
       site: 'chess.danmarzari.com',
       date: todayTag(),
       white,
@@ -363,7 +406,7 @@ export default function Home() {
       eco: opening?.eco,
       opening: opening?.name,
     };
-  }, [sf.opponentEnabled, sf.elo, computerPlays, opening]);
+  }, [committedMode, computerPlays, sf.elo, opening]);
 
   const exportPgn = useCallback(() => {
     const pgn = buildPgn(moveHistory, getPgnMeta());
@@ -392,11 +435,12 @@ export default function Home() {
   }, [moveHistory, getPgnMeta, showToast]);
 
   const handleResign = useCallback(() => {
-    if (!sf.opponentEnabled || !computerPlays) return;
+    if (gamePhase !== 'playing' || committedMode !== 'cpu' || !computerPlays) return;
     sound.play('defeat');
     clock.stop();
     setGameResult({ type: 'resign', winner: computerPlays });
-  }, [sf.opponentEnabled, computerPlays, sound, clock]);
+    setGamePhase('ended');
+  }, [gamePhase, committedMode, computerPlays, sound, clock]);
 
   const handleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -405,14 +449,6 @@ export default function Home() {
       document.exitFullscreen?.().catch(() => {});
     }
   }, []);
-
-  const handleStartTimed = useCallback(
-    (tc: TimeControl | null) => {
-      if (tc) clock.start(tc);
-      else clock.disable();
-    },
-    [clock]
-  );
 
   const saveAnnotation = useCallback((idx: number, value: string) => {
     setAnnotations((prev) => {
@@ -429,15 +465,15 @@ export default function Home() {
       const t = e.target as HTMLElement;
       if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA') return;
 
-      if (e.key === 'Escape') {
-        boardRef.current?.clearPremoves();
-        setAnnotating(null);
-      } else if (e.key === 'ArrowLeft' && currentMoveIndex >= 0) goToMove(currentMoveIndex - 1);
-      else if (e.key === 'ArrowRight' && currentMoveIndex < moveHistory.length - 1) goToMove(currentMoveIndex + 1);
+      if (e.key === 'Escape') setAnnotating(null);
+      else if (e.key === 'ArrowLeft' && currentMoveIndex >= 0) goToMove(currentMoveIndex - 1);
+      else if (e.key === 'ArrowRight' && currentMoveIndex < moveHistory.length - 1)
+        goToMove(currentMoveIndex + 1);
       else if (e.key === 'Home') goToMove(-1);
       else if (e.key === 'End') goToMove(moveHistory.length - 1);
-      else if (e.key === 'f' || e.key === 'F') setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'));
-      else if (e.key === 'n' || e.key === 'N') newGame();
+      else if (e.key === 'f' || e.key === 'F')
+        setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'));
+      else if (e.key === 'n' || e.key === 'N') backToSetup();
       else if (e.key === 'u' || e.key === 'U') undoMove();
       else if (e.key === 's' || e.key === 'S') saveGame();
       else if (e.key === 'x' || e.key === 'X') exportPgn();
@@ -446,7 +482,16 @@ export default function Home() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [currentMoveIndex, moveHistory.length, goToMove, newGame, undoMove, saveGame, exportPgn, handleResign]);
+  }, [
+    currentMoveIndex,
+    moveHistory.length,
+    goToMove,
+    backToSetup,
+    undoMove,
+    saveGame,
+    exportPgn,
+    handleResign,
+  ]);
 
   const currentFen = positions[currentMoveIndex + 1] || positions[0];
 
@@ -466,24 +511,31 @@ export default function Home() {
   const primaryScore = sf.lines[0]?.score ?? null;
   const primaryMate = sf.lines[0]?.mate ?? null;
 
+  const allowPremoves = gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays;
+
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
-      <div className="flex flex-col lg:flex-row gap-3 items-start">
-        {/* Left: vertical eval bar */}
-        <div className="hidden lg:block shrink-0">
-          <EvalBar
-            score={primaryScore}
-            mate={primaryMate}
-            depth={sf.depth}
-            height={BOARD_WIDTH}
-            orientation={boardOrientation}
-            isAnalyzing={sf.isAnalyzing}
-          />
-        </div>
+      <div className="flex flex-col lg:flex-row gap-3 items-start justify-center">
+        {/* Left: eval bar (hidden during setup) */}
+        {gamePhase !== 'setup' && (
+          <div className="hidden lg:block shrink-0">
+            <EvalBar
+              score={primaryScore}
+              mate={primaryMate}
+              depth={sf.depth}
+              height={BOARD_WIDTH}
+              orientation={boardOrientation}
+              isAnalyzing={sf.isAnalyzing}
+            />
+          </div>
+        )}
 
         {/* Center: board + clocks + status */}
-        <div className="shrink-0 mx-auto lg:mx-0 space-y-2" style={{ maxWidth: BOARD_WIDTH, width: '100%' }}>
-          {clock.tc && (
+        <div
+          className={`shrink-0 mx-auto lg:mx-0 space-y-2 ${gamePhase === 'setup' ? 'opacity-60 pointer-events-none' : ''}`}
+          style={{ maxWidth: BOARD_WIDTH, width: '100%' }}
+        >
+          {clock.tc && gamePhase !== 'setup' && (
             <ClockDisplay
               seconds={boardOrientation === 'white' ? clock.state.black : clock.state.white}
               active={clock.state.activeColor === (boardOrientation === 'white' ? 'b' : 'w')}
@@ -501,10 +553,10 @@ export default function Home() {
             showCoords={showCoords}
             lastMove={lastMove}
             externalArrow={hoverArrow}
-            allowPremoves={!!sf.opponentEnabled && !!computerPlays}
+            allowPremoves={allowPremoves}
           />
 
-          {clock.tc && (
+          {clock.tc && gamePhase !== 'setup' && (
             <ClockDisplay
               seconds={boardOrientation === 'white' ? clock.state.white : clock.state.black}
               active={clock.state.activeColor === (boardOrientation === 'white' ? 'w' : 'b')}
@@ -513,113 +565,131 @@ export default function Home() {
             />
           )}
 
-          <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
-            <span className="text-[var(--foreground-strong)]">{status}</span>
-            <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-              {sf.opponentEnabled && computerPlays && (
-                <span>
-                  You: {computerPlays === 'w' ? '● Black' : '○ White'}
-                  <span className="mx-2 text-[var(--border)]">|</span>
-                  CPU {sf.elo}
-                </span>
-              )}
-              {sf.opponentEnabled && computerPlays && (
-                <span className="text-[10px] opacity-70">right-click to clear premoves</span>
-              )}
-            </div>
-          </div>
-
-          {/* Centipawn-loss graph under board */}
-          {moveHistory.length > 0 && (
-            <CpLossGraph
-              evals={moveEvals}
-              nags={nags}
-              currentMoveIndex={currentMoveIndex}
-              onJumpTo={goToMove}
-              width={BOARD_WIDTH}
-            />
-          )}
-
-          {/* Opening + accuracy */}
-          <div className="flex items-center justify-between text-xs">
-            <div className="text-[var(--muted)] truncate">
-              {opening ? (
-                <>
-                  <span className="font-mono text-[var(--accent)]">{opening.eco}</span>{' '}
-                  <span className="text-[var(--foreground)]">{opening.name}</span>
-                </>
-              ) : (
-                <span className="opacity-50">—</span>
-              )}
-            </div>
-            {(whiteAcc !== null || blackAcc !== null) && (
-              <div className="flex items-center gap-3 font-mono shrink-0">
-                <span>
-                  <span className="text-[var(--muted)]">W </span>
-                  <span className="text-[var(--foreground-strong)] font-semibold">
-                    {whiteAcc !== null ? `${whiteAcc.toFixed(0)}%` : '—'}
-                  </span>
-                </span>
-                <span>
-                  <span className="text-[var(--muted)]">B </span>
-                  <span className="text-[var(--foreground-strong)] font-semibold">
-                    {blackAcc !== null ? `${blackAcc.toFixed(0)}%` : '—'}
-                  </span>
-                </span>
+          {gamePhase !== 'setup' && (
+            <>
+              <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
+                <span className="text-[var(--foreground-strong)]">{status}</span>
+                <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                  {committedMode === 'cpu' && computerPlays && (
+                    <span>
+                      You: {computerPlays === 'w' ? '● Black' : '○ White'}
+                      <span className="mx-2 text-[var(--border)]">|</span>
+                      CPU {sf.elo}
+                    </span>
+                  )}
+                  {allowPremoves && (
+                    <span className="text-[10px] opacity-70">right-click to clear premoves</span>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+
+              {moveHistory.length > 0 && (
+                <CpLossGraph
+                  evals={moveEvals}
+                  nags={nags}
+                  currentMoveIndex={currentMoveIndex}
+                  onJumpTo={goToMove}
+                  width={BOARD_WIDTH}
+                />
+              )}
+
+              <div className="flex items-center justify-between text-xs">
+                <div className="text-[var(--muted)] truncate">
+                  {opening ? (
+                    <>
+                      <span className="font-mono text-[var(--accent)]">{opening.eco}</span>{' '}
+                      <span className="text-[var(--foreground)]">{opening.name}</span>
+                    </>
+                  ) : (
+                    <span className="opacity-50">—</span>
+                  )}
+                </div>
+                {(whiteAcc !== null || blackAcc !== null) && (
+                  <div className="flex items-center gap-3 font-mono shrink-0">
+                    <span>
+                      <span className="text-[var(--muted)]">W </span>
+                      <span className="text-[var(--foreground-strong)] font-semibold">
+                        {whiteAcc !== null ? `${whiteAcc.toFixed(0)}%` : '—'}
+                      </span>
+                    </span>
+                    <span>
+                      <span className="text-[var(--muted)]">B </span>
+                      <span className="text-[var(--foreground-strong)] font-semibold">
+                        {blackAcc !== null ? `${blackAcc.toFixed(0)}%` : '—'}
+                      </span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Right side panel */}
+        {/* Right panel */}
         <div className="flex-1 space-y-2 w-full min-w-[280px] lg:max-w-sm">
-          <TimeControlPicker currentTc={clock.tc} onSelect={handleStartTimed} locked={gameInProgress} />
-          <OpponentPanel
-            enabled={sf.opponentEnabled}
-            onToggle={sf.toggleOpponent}
-            color={sf.opponentColor}
-            onColorChange={sf.setOpponentColor}
-            elo={sf.elo}
-            onEloChange={sf.setElo}
-            isThinking={sf.isComputerThinking}
-            locked={gameInProgress}
-          />
-          <EngineAnalysis
-            lines={sf.lines}
-            depth={sf.depth}
-            isThinking={sf.isAnalyzing}
-            onHoverLine={setHoverArrow}
-          />
-          <MoveHistory
-            moves={moveHistory}
-            nags={nags}
-            annotations={annotations}
-            currentMoveIndex={currentMoveIndex}
-            onMoveClick={goToMove}
-            onAnnotate={(index, x, y) => setAnnotating({ index, x, y })}
-          />
-          <GameControls
-            onNewGame={newGame}
-            onFlipBoard={() => setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'))}
-            onUndo={undoMove}
-            onGoToStart={() => goToMove(-1)}
-            onGoBack={() => goToMove(Math.max(-1, currentMoveIndex - 1))}
-            onGoForward={() => goToMove(Math.min(moveHistory.length - 1, currentMoveIndex + 1))}
-            onGoToEnd={() => goToMove(moveHistory.length - 1)}
-            onImportPgn={() => setShowImport(true)}
-            onExportPgn={exportPgn}
-            onSaveGame={saveGame}
-            onResign={handleResign}
-            onFullscreen={handleFullscreen}
-            onToggleSound={() => sound.setEnabled(!sound.enabled)}
-            onToggleCoords={() => setShowCoords((s) => !s)}
-            soundEnabled={sound.enabled}
-            coordsVisible={showCoords}
-            canUndo={moveHistory.length > 0}
-            canGoBack={currentMoveIndex > -1}
-            canGoForward={currentMoveIndex < moveHistory.length - 1}
-            canResign={!!sf.opponentEnabled && !!computerPlays && !game.isGameOver()}
-          />
+          {gamePhase === 'setup' ? (
+            <SetupPanel
+              mode={draftMode}
+              onModeChange={setDraftMode}
+              cpuColor={draftCpuColor}
+              onCpuColorChange={setDraftCpuColor}
+              cpuElo={draftCpuElo}
+              onCpuEloChange={setDraftCpuElo}
+              tc={draftTc}
+              onTcChange={setDraftTc}
+              onStart={startGame}
+            />
+          ) : (
+            <>
+              <GameStatusPanel
+                mode={committedMode}
+                cpuColor={computerPlays}
+                cpuElo={sf.elo}
+                tc={clock.tc}
+                isCpuThinking={sf.isComputerThinking}
+                onQuit={backToSetup}
+                onResign={handleResign}
+                canResign={gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays}
+                phase={gamePhase}
+              />
+              <EngineAnalysis
+                lines={sf.lines}
+                depth={sf.depth}
+                isThinking={sf.isAnalyzing}
+                onHoverLine={setHoverArrow}
+              />
+              <MoveHistory
+                moves={moveHistory}
+                nags={nags}
+                annotations={annotations}
+                currentMoveIndex={currentMoveIndex}
+                onMoveClick={goToMove}
+                onAnnotate={(index, x, y) => setAnnotating({ index, x, y })}
+              />
+              <GameControls
+                onNewGame={backToSetup}
+                onFlipBoard={() => setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'))}
+                onUndo={undoMove}
+                onGoToStart={() => goToMove(-1)}
+                onGoBack={() => goToMove(Math.max(-1, currentMoveIndex - 1))}
+                onGoForward={() => goToMove(Math.min(moveHistory.length - 1, currentMoveIndex + 1))}
+                onGoToEnd={() => goToMove(moveHistory.length - 1)}
+                onImportPgn={() => setShowImport(true)}
+                onExportPgn={exportPgn}
+                onSaveGame={saveGame}
+                onResign={handleResign}
+                onFullscreen={handleFullscreen}
+                onToggleSound={() => sound.setEnabled(!sound.enabled)}
+                onToggleCoords={() => setShowCoords((s) => !s)}
+                soundEnabled={sound.enabled}
+                coordsVisible={showCoords}
+                canUndo={moveHistory.length > 0 && gamePhase === 'playing'}
+                canGoBack={currentMoveIndex > -1}
+                canGoForward={currentMoveIndex < moveHistory.length - 1}
+                canResign={gamePhase === 'playing' && committedMode === 'cpu' && !!computerPlays}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -627,14 +697,14 @@ export default function Home() {
 
       <GameEndModal
         result={gameResult}
-        humanColor={sf.opponentEnabled && computerPlays ? (computerPlays === 'w' ? 'b' : 'w') : null}
+        humanColor={committedMode === 'cpu' && computerPlays ? (computerPlays === 'w' ? 'b' : 'w') : null}
         whiteAccuracy={whiteAcc}
         blackAccuracy={blackAcc}
         nags={nags}
         onClose={() => setGameResult(null)}
         onNewGame={() => {
           setGameResult(null);
-          newGame();
+          backToSetup();
         }}
         onAnalyze={() => setGameResult(null)}
       />
