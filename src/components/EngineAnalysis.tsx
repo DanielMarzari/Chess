@@ -1,6 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { Cpu } from 'lucide-react';
+import type { Square } from 'chess.js';
 
 export interface EngineLineInfo {
   depth: number;
@@ -13,10 +15,10 @@ interface EngineAnalysisProps {
   lines: EngineLineInfo[];
   depth: number;
   isThinking: boolean;
+  onHoverLine?: (move: { from: Square; to: Square } | null) => void;
 }
 
 function formatScore(line: EngineLineInfo): string {
-  // Lines are already normalized to white's perspective
   if (line.mate !== null) {
     return line.mate >= 0 ? `M${line.mate}` : `-M${Math.abs(line.mate)}`;
   }
@@ -24,7 +26,15 @@ function formatScore(line: EngineLineInfo): string {
   return score >= 0 ? `+${score.toFixed(2)}` : score.toFixed(2);
 }
 
-export default function EngineAnalysis({ lines, depth, isThinking }: EngineAnalysisProps) {
+function firstMoveFromPv(pv: string): { from: Square; to: Square } | null {
+  const first = pv.trim().split(/\s+/)[0];
+  if (!first || first.length < 4) return null;
+  return { from: first.slice(0, 2) as Square, to: first.slice(2, 4) as Square };
+}
+
+export default function EngineAnalysis({ lines, depth, isThinking, onHoverLine }: EngineAnalysisProps) {
+  const [hovered, setHovered] = useState<number | null>(null);
+
   return (
     <div className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden">
       <div className="px-3 py-2 border-b border-[var(--border)] flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
@@ -42,7 +52,20 @@ export default function EngineAnalysis({ lines, depth, isThinking }: EngineAnaly
           <p className="text-[var(--muted)] text-xs">Waiting for engine…</p>
         )}
         {lines.map((line, i) => (
-          <div key={i} className="flex gap-2 text-xs font-mono">
+          <div
+            key={i}
+            className={`flex gap-2 text-xs font-mono rounded px-1 cursor-default transition-colors ${
+              hovered === i ? 'bg-[var(--surface-2)]' : ''
+            }`}
+            onMouseEnter={() => {
+              setHovered(i);
+              onHoverLine?.(firstMoveFromPv(line.pv));
+            }}
+            onMouseLeave={() => {
+              setHovered(null);
+              onHoverLine?.(null);
+            }}
+          >
             <span className="font-bold w-12 text-right shrink-0 text-[var(--foreground-strong)]">
               {formatScore(line)}
             </span>
