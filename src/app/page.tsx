@@ -19,6 +19,7 @@ import AnnotationEditor from '@/components/AnnotationEditor';
 import { useStockfish, type OpponentColor } from '@/hooks/useStockfish';
 import { useSound } from '@/hooks/useSound';
 import { useClock, type TimeControl } from '@/hooks/useClock';
+import { useSettings } from '@/hooks/useSettings';
 import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
 import { identifyOpening } from '@/lib/openings';
 import { buildPgn, todayTag } from '@/lib/pgn';
@@ -27,6 +28,28 @@ import { explainMove, isWinningCapture, findRefutation, type CoachExplanation } 
 const BOARD_WIDTH = 560;
 
 type GamePhase = 'setup' | 'playing' | 'ended';
+
+// Material balance for `perspective` minus opponent, in pawn-equivalents.
+// Used by the coach demo to detect when the refutation's advantage is "exposed".
+function relativeMaterial(fen: string, perspective: 'w' | 'b'): number {
+  const vals: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  try {
+    const g = new Chess(fen);
+    let mine = 0;
+    let theirs = 0;
+    for (const row of g.board()) {
+      for (const cell of row) {
+        if (!cell) continue;
+        const v = vals[cell.type] || 0;
+        if (cell.color === perspective) mine += v;
+        else theirs += v;
+      }
+    }
+    return mine - theirs;
+  } catch {
+    return 0;
+  }
+}
 
 export default function Home() {
   // Game phase — controls the entire lifecycle
@@ -99,6 +122,7 @@ export default function Home() {
 
   const sf = useStockfish();
   const sound = useSound();
+  const settings = useSettings();
 
   const onFlag = useCallback(
     (color: 'w' | 'b') => {
@@ -163,6 +187,10 @@ export default function Home() {
     if (evalBefore === null || evalAfter === null || depthAfter < 12) return;
     if (nag === null) return; // not bad enough
     if (!['blunder', 'mistake', 'inaccuracy'].includes(nag)) return;
+    // Respect user's coaching preferences — skip NAG types they've turned off.
+    if (nag === 'blunder' && !settings.coachOnBlunder) return;
+    if (nag === 'mistake' && !settings.coachOnMistake) return;
+    if (nag === 'inaccuracy' && !settings.coachOnInaccuracy) return;
 
     // We're going to coach. Mark handled.
     coachedIndicesRef.current.add(lastIdx);
@@ -195,9 +223,10 @@ export default function Home() {
 
     // Capture the refutation: the engine's best line from the CURRENT
     // (post-bad-move) position. sf.lines was analyzing that position right
-    // before we got here. Keep a few half-moves to play out.
+    // before we got here. Keep more of the PV so the demo effect can play
+    // until the advantage is actually cashed in.
     const pv = sf.lines[0]?.pv?.trim().split(/\s+/).filter(Boolean) ?? [];
-    coachRefutationRef.current = pv.slice(0, 4);
+    coachRefutationRef.current = pv.slice(0, 14);
 
     // DO NOT rewind the game state yet. We want the user to see their move
     // finish animating, then the demo plays out the consequences, THEN we
@@ -219,7 +248,7 @@ export default function Home() {
     // Also store the current engine's PV as the "refutation response" so the
     // heuristic explainer has something concrete to point at.
     if (pv.length > 0) coachResponsePvRef.current = pv.slice(0, 2);
-  }, [gamePhase, committedMode, coachActive, moveHistory, nags, moveEvals, computerPlays, positions, sf.lines]);
+  }, [gamePhase, committedMode, coachActive, moveHistory, nags, moveEvals, computerPlays, positions, sf.lines, settings]);
 
   // Transition 'pausing' → 'demo' after a short beat.
   useEffect(() => {
@@ -239,7 +268,9 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [coachActive, coachSubPhase, positions]);
 
-  // Demo playback: advance through the refutation moves with animated arrows.
+  // Demo playback: walk the engine's refutation line until the positional or
+  // material advantage is actually exposed, then dwell and hand off to the
+  // rewind phase. We cap at ~14 half-moves to bound total demo length.
   useEffect(() => {
     if (!coachActive || coachSubPhase !== 'demo') return;
     const moves = coachRefutationRef.current;
@@ -252,10 +283,16 @@ export default function Home() {
     const postBadFen = positions[coachBadIndexRef.current + 1] || positions[0];
     let currentPos = postBadFen;
     let idx = 0;
+    // Side that benefits from the refutation = the opposite of who just played the bad move
+    const mover = coachMoverRef.current; // the student's color
+    const startBalance = relativeMaterial(postBadFen, mover);
+    let exposedAtIdx: number | null = null;
+    const MAX_HALF_MOVES = 14;
+    const MIN_HALF_MOVES_AFTER_EXPOSURE = 2; // let the opponent consolidate for a move or two
 
     const playNext = () => {
       if (cancelled) return;
-      if (idx >= moves.length) {
+      if (idx >= moves.length || idx >= MAX_HALF_MOVES) {
         // Demo done — dwell on the final position so the student can absorb it
         setTimeout(() => {
           if (cancelled) return;
@@ -271,7 +308,7 @@ export default function Home() {
         return;
       }
 
-      // Show the arrow first so the user sees what's about to happen
+      // Arrow color: red for the side refuting (opponent), blue for the student's forced replies
       const arrowColor = idx % 2 === 0 ? '#dc322f' : '#3893e8';
       setDemoArrow({ from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, color: arrowColor });
 
@@ -291,17 +328,40 @@ export default function Home() {
           setDemoPosition(currentPos);
           setDemoArrow(null);
           idx++;
-          setTimeout(playNext, 900);
+
+          // If the advantage is now "exposed" — material vs the student has
+          // shifted by ≥ 2 pawns relative to the bad-move position, or the
+          // position is mate — mark the moment and keep going a bit longer
+          // so the consolidating move is visible before we rewind.
+          const currentBalance = relativeMaterial(currentPos, mover);
+          const delta = startBalance - currentBalance; // positive means student has lost material
+          const isTerminal = g.isGameOver();
+          if (exposedAtIdx === null && (delta >= 2 || isTerminal)) {
+            exposedAtIdx = idx - 1;
+          }
+
+          const reachedExposureFollowup =
+            exposedAtIdx !== null && idx >= exposedAtIdx + 1 + MIN_HALF_MOVES_AFTER_EXPOSURE;
+
+          if (isTerminal || reachedExposureFollowup) {
+            // Dwell, then hand off to rewind
+            setTimeout(() => {
+              if (cancelled) return;
+              setDemoArrow(null);
+              setCoachSubPhase('rewinding');
+            }, 1400);
+            return;
+          }
+
+          setTimeout(playNext, 850);
         } catch {
           setCoachSubPhase('rewinding');
         }
       }, 800);
 
-      // Timer cleanup handled by outer cancelled flag
       void arrowTimer;
     };
 
-    // Initial delay before the first demo move
     const kick = setTimeout(playNext, 300);
     return () => {
       cancelled = true;
@@ -1353,6 +1413,7 @@ export default function Home() {
                 currentMoveIndex={currentMoveIndex}
                 onMoveClick={goToMove}
                 onAnnotate={(index, x, y) => setAnnotating({ index, x, y })}
+                notation={settings.notation}
               />
               <GameControls
                 onNewGame={backToSetup}
