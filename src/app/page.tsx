@@ -549,8 +549,8 @@ export default function Home() {
     sf.cancelMove();
     boardRef.current?.clearPremoves();
 
-    // Commit draft settings to the engine + clock
-    if (draftMode === 'cpu') {
+    // Both 'cpu' and 'coach' modes play against the computer
+    if (draftMode === 'cpu' || draftMode === 'coach') {
       if (!sf.opponentEnabled) sf.toggleOpponent();
       sf.setOpponentColor(draftCpuColor);
       sf.setElo(draftCpuElo);
