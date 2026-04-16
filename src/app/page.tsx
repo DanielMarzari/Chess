@@ -417,6 +417,27 @@ export default function Home() {
     if (pvTokens.length === 0) return;
 
     const bestUci = pvTokens[0];
+    const preFenGuard = coachPreFenRef.current;
+    if (!preFenGuard) return;
+
+    // STALENESS GUARD: when the game was rewound to preFen, the engine had to
+    // switch from analyzing the post-bad-move position (opponent to move) back
+    // to preFen (you to move). While it's switching, sf.lines may briefly
+    // hold stale PV data whose first move is a legal move for the OPPONENT
+    // but isn't legal for you. If the PV's first move isn't playable from
+    // preFen, treat it as stale and wait for the next update.
+    try {
+      const guardGame = new Chess(preFenGuard);
+      const result = guardGame.move({
+        from: bestUci.slice(0, 2),
+        to: bestUci.slice(2, 4),
+        promotion: bestUci.slice(4, 5) || 'q',
+      });
+      if (!result) return;
+    } catch {
+      return;
+    }
+
     coachBestMoveUciRef.current = bestUci;
     coachBestPvRef.current = pvTokens;
 
