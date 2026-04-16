@@ -22,7 +22,7 @@ import { useClock, type TimeControl } from '@/hooks/useClock';
 import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
 import { identifyOpening } from '@/lib/openings';
 import { buildPgn, todayTag } from '@/lib/pgn';
-import { explainMove, type CoachExplanation } from '@/lib/coaching';
+import { explainMove, isWinningCapture, findRefutation, type CoachExplanation } from '@/lib/coaching';
 
 const BOARD_WIDTH = 560;
 
@@ -92,6 +92,10 @@ export default function Home() {
   const [demoArrow, setDemoArrow] = useState<{ from: Square; to: Square; color?: string } | null>(null);
   // The refutation PV we captured from the engine at trigger time (UCI moves).
   const coachRefutationRef = useRef<string[]>([]);
+  // Retry-demo queue + text (populated when user plays a wrong retry attempt)
+  const retryDemoQueueRef = useRef<string[]>([]);
+  const retryDemoStartFenRef = useRef<string | null>(null);
+  const [retryRefutationText, setRetryRefutationText] = useState<string | null>(null);
 
   const sf = useStockfish();
   const sound = useSound();
@@ -305,6 +309,73 @@ export default function Home() {
     };
   }, [coachActive, coachSubPhase, positions]);
 
+  // Retry-demo: play out the opponent's refutation of a wrong attempt,
+  // then rewind back to preFen and enter retry-wrong.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'retry-demo') return;
+
+    let cancelled = false;
+    const queue = retryDemoQueueRef.current;
+    const startFen = retryDemoStartFenRef.current;
+    if (!startFen || queue.length === 0) {
+      // Fallback: straight to retry-wrong
+      setDemoPosition(null);
+      setDemoArrow(null);
+      setCoachSubPhase('retry-wrong');
+      return;
+    }
+
+    let pos = startFen;
+
+    const playOne = () => {
+      if (cancelled) return;
+      const uci = queue[0];
+      const arrowColor = '#dc322f';
+      setDemoArrow({
+        from: uci.slice(0, 2) as Square,
+        to: uci.slice(2, 4) as Square,
+        color: arrowColor,
+      });
+      setTimeout(() => {
+        if (cancelled) return;
+        const g = new Chess(pos);
+        try {
+          const m = g.move({
+            from: uci.slice(0, 2),
+            to: uci.slice(2, 4),
+            promotion: uci.slice(4, 5) || 'q',
+          });
+          if (m?.captured) soundRef.current.play('capture');
+          else if (g.inCheck()) soundRef.current.play('check');
+          else soundRef.current.play('move');
+          pos = g.fen();
+          setDemoPosition(pos);
+          setDemoArrow(null);
+          // Dwell, then rewind to preFen and enter retry-wrong
+          setTimeout(() => {
+            if (cancelled) return;
+            setDemoPosition(null);
+            setDemoArrow(null);
+            const remaining = coachAttemptsLeft - 1;
+            setCoachAttemptsLeft(remaining);
+            if (remaining <= 0) setCoachSubPhase('reveal');
+            else setCoachSubPhase('retry-wrong');
+          }, 1300);
+        } catch {
+          setDemoPosition(null);
+          setDemoArrow(null);
+          setCoachSubPhase('retry-wrong');
+        }
+      }, 700);
+    };
+
+    const kick = setTimeout(playOne, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(kick);
+    };
+  }, [coachActive, coachSubPhase, coachAttemptsLeft]);
+
   // Transition 'rewinding' → 'explain': actually rewind the game state now.
   useEffect(() => {
     if (!coachActive || coachSubPhase !== 'rewinding') return;
@@ -402,9 +473,10 @@ export default function Home() {
       nag: nags[coachBadIndexRef.current] ?? 'blunder',
     });
 
-    // Lightweight refutation heuristic: find the most valuable capture the
-    // opponent has available in postBadFen (so "why bad" can say "Black takes
-    // your rook for free"). Uses only chess.js, no engine call.
+    // Lightweight refutation heuristic: find the most valuable WINNING capture
+    // the opponent has available in postBadFen (defender-aware — ignores
+    // captures of defended pieces that would lose material). Only chess.js,
+    // no engine call.
     try {
       const post = new Chess(postBadFen);
       const moves = post.moves({ verbose: true }) as Array<{
@@ -412,13 +484,23 @@ export default function Home() {
         to: string;
         flags: string;
         captured?: string;
+        promotion?: string;
       }>;
-      const captures = moves.filter((m) => m.flags.includes('c') || m.flags.includes('e'));
-      if (captures.length > 0) {
-        const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-        captures.sort((a, b) => (values[b.captured || 'p'] || 0) - (values[a.captured || 'p'] || 0));
-        const best = captures[0];
-        coachResponsePvRef.current = [`${best.from}${best.to}`];
+      const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+      const winningCaptures = moves
+        .filter((m) => m.flags.includes('c') || m.flags.includes('e'))
+        .filter((m) => {
+          const uci = `${m.from}${m.to}${m.promotion || ''}`;
+          return isWinningCapture(postBadFen, uci);
+        })
+        .sort((a, b) => (values[b.captured || 'p'] || 0) - (values[a.captured || 'p'] || 0));
+      if (winningCaptures.length > 0) {
+        const best = winningCaptures[0];
+        coachResponsePvRef.current = [`${best.from}${best.to}${best.promotion || ''}`];
+      } else {
+        // Clear — don't fabricate a refutation. Explainer will fall back to
+        // an eval-based message instead of claiming a capture exists.
+        coachResponsePvRef.current = [];
       }
     } catch {
       // ignore
@@ -630,19 +712,44 @@ export default function Home() {
           applyMove(source, target, 'q');
           setCoachLastAttemptSan(tried.san);
           setCoachSubPhase('retry-correct');
+          return false;
+        }
+
+        // Wrong attempt — instead of just saying "try again", demo what would
+        // actually happen. Find the opponent's best response at the attempt
+        // position and play it out on the board.
+        const attemptFen = tryGame.fen();
+        soundRef.current.play('move');
+        setCoachLastAttemptSan(tried.san);
+
+        const refutation = findRefutation(attemptFen);
+        if (refutation) {
+          // Set up a short retry-demo (1 half-move: opponent's best reply)
+          retryDemoQueueRef.current = [refutation.uci];
+          retryDemoStartFenRef.current = attemptFen;
+          const text =
+            refutation.type === 'mate'
+              ? `After that, ${refutation.san} is checkmate.`
+              : refutation.type === 'capture' && refutation.captured
+                ? `After that, ${refutation.san} wins your ${
+                    { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[refutation.captured] || 'piece'
+                  }.`
+                : refutation.type === 'check'
+                  ? `After that, ${refutation.san} gives check with strong pressure.`
+                  : `The opponent has ${refutation.san} and the position turns against you.`;
+          setRetryRefutationText(text);
+          // Board jumps to attempt position for the demo to animate from
+          setDemoPosition(attemptFen);
+          setCoachSubPhase('retry-demo');
         } else {
-          // Wrong — decrement attempts, keep board at preFen
-          soundRef.current.play('move');
+          // No clear refutation — just say "not quite"
+          setRetryRefutationText(null);
           const remaining = coachAttemptsLeft - 1;
           setCoachAttemptsLeft(remaining);
-          setCoachLastAttemptSan(tried.san);
-          if (remaining <= 0) {
-            setCoachSubPhase('reveal');
-          } else {
-            setCoachSubPhase('retry-wrong');
-          }
+          if (remaining <= 0) setCoachSubPhase('reveal');
+          else setCoachSubPhase('retry-wrong');
         }
-        return false; // visually snap back; we handled via applyMove if correct
+        return false;
       }
 
       return applyMove(source, target);
@@ -858,12 +965,17 @@ export default function Home() {
     setCoachSubPhase('analyzing');
     setCoachExplanation(null);
     setCoachLastAttemptSan(null);
+    setRetryRefutationText(null);
+    setDemoPosition(null);
+    setDemoArrow(null);
     coachBadMoveUciRef.current = null;
     coachPreFenRef.current = null;
     coachBestMoveUciRef.current = null;
     coachBestPvRef.current = [];
     coachResponsePvRef.current = [];
     coachBadIndexRef.current = -1;
+    retryDemoQueueRef.current = [];
+    retryDemoStartFenRef.current = null;
     // Resume the clock so the CPU's turn can run out normally
     clockRef.current.resume();
   }, []);
@@ -1009,7 +1121,11 @@ export default function Home() {
   const boardPosition = demoPosition ?? currentFen;
   const isCoachBusy =
     coachActive &&
-    (coachSubPhase === 'pausing' || coachSubPhase === 'demo' || coachSubPhase === 'rewinding' || coachSubPhase === 'analyzing');
+    (coachSubPhase === 'pausing' ||
+      coachSubPhase === 'demo' ||
+      coachSubPhase === 'rewinding' ||
+      coachSubPhase === 'retry-demo' ||
+      coachSubPhase === 'analyzing');
 
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
@@ -1066,6 +1182,7 @@ export default function Home() {
                   {coachSubPhase === 'rewinding' && 'Rewinding'}
                   {coachSubPhase === 'analyzing' && 'Analyzing'}
                   {coachSubPhase === 'explain' && 'Coach · your turn'}
+                  {coachSubPhase === 'retry-demo' && 'Testing your idea'}
                   {coachSubPhase === 'retry-wrong' && 'Try again'}
                   {coachSubPhase === 'retry-correct' && 'Nice!'}
                   {coachSubPhase === 'reveal' && 'Answer revealed'}
@@ -1174,6 +1291,7 @@ export default function Home() {
                   attemptsLeft={coachAttemptsLeft}
                   badMoveSan={coachBadMoveSan}
                   lastAttemptSan={coachLastAttemptSan}
+                  retryRefutationText={retryRefutationText}
                   onSkip={coachSkip}
                   onShowSolution={coachShowSolution}
                   onContinue={coachContinue}

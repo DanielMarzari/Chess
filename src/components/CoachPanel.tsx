@@ -11,7 +11,8 @@ export type CoachSubPhase =
   | 'demo' // auto-playing the consequences of the bad move
   | 'rewinding' // brief visual before returning to pre-move position
   | 'explain' // showing what went wrong + prompt to try again
-  | 'retry-wrong' // just tried but it wasn't right
+  | 'retry-demo' // user just tried a wrong move; playing out opponent's refutation of it
+  | 'retry-wrong' // just tried but it wasn't right (after retry-demo completes)
   | 'retry-correct' // just tried and it was a good move
   | 'reveal' // out of tries or gave up — here's the answer
   | 'done'; // finished, waiting for continue
@@ -22,6 +23,7 @@ interface CoachPanelProps {
   attemptsLeft: number;
   badMoveSan: string;
   lastAttemptSan: string | null;
+  retryRefutationText: string | null; // what happens after a wrong retry attempt
   onSkip: () => void; // keep bad move, continue
   onShowSolution: () => void; // give up, show best, apply it
   onContinue: () => void; // proceed after reveal / correct answer
@@ -33,6 +35,7 @@ export default function CoachPanel({
   attemptsLeft,
   badMoveSan,
   lastAttemptSan,
+  retryRefutationText,
   onSkip,
   onShowSolution,
   onContinue,
@@ -122,13 +125,26 @@ export default function CoachPanel({
           </>
         )}
 
+        {subPhase === 'retry-demo' && (
+          <>
+            <div className="text-[13px] leading-relaxed text-[var(--foreground)]">
+              Watch what happens after{' '}
+              <span className="font-mono font-bold">{lastAttemptSan}</span>…
+            </div>
+          </>
+        )}
+
         {subPhase === 'retry-wrong' && (
           <>
-            <div className="flex items-center gap-2 text-sm text-[var(--danger)] bg-[var(--danger)]/10 rounded px-2 py-1.5">
-              <XCircle size={14} />
+            <div className="flex items-start gap-2 text-sm text-[var(--danger)] bg-[var(--danger)]/10 rounded px-2 py-1.5">
+              <XCircle size={14} className="shrink-0 mt-0.5" />
               <span>
-                <span className="font-mono font-bold">{lastAttemptSan}</span> isn't better. Try
-                again.
+                <span className="font-mono font-bold">{lastAttemptSan}</span> isn't the best.
+                {retryRefutationText && (
+                  <span className="text-[var(--foreground)] block text-[12px] mt-1">
+                    {retryRefutationText}
+                  </span>
+                )}
               </span>
             </div>
             <AttemptsIndicator left={attemptsLeft} max={3} />

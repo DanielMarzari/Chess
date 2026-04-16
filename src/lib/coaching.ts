@@ -23,6 +23,50 @@ function pieceName(p: PieceSymbol): string {
   return PIECE_NAMES[p] || 'piece';
 }
 
+/**
+ * Exchange-aware capture check.
+ * Given a position `fen` where the side-to-move is about to play `uci` (a capture),
+ * returns true if that capture wins material after considering one level of recapture.
+ * Handles the "defended pawn" case: Nxe5 when e5 is defended by a pawn is NOT winning.
+ */
+export function isWinningCapture(fen: string, uci: string): boolean {
+  if (uci.length < 4) return false;
+  const g = new Chess(fen);
+  const from = uci.slice(0, 2) as Square;
+  const to = uci.slice(2, 4) as Square;
+  const attacker = g.get(from);
+  const target = g.get(to);
+  if (!attacker || !target) return false;
+
+  const attackerValue = PIECE_VALUES[attacker.type];
+  const targetValue = PIECE_VALUES[target.type];
+
+  // Apply the capture
+  try {
+    g.move({ from, to, promotion: uci.slice(4, 5) || 'q' });
+  } catch {
+    return false;
+  }
+
+  // Defender-to-move now: any legal move that recaptures on `to`?
+  const defenderMoves = g.moves({ verbose: true }) as Array<{
+    to: string;
+    piece?: PieceSymbol;
+    flags?: string;
+  }>;
+  const recaps = defenderMoves.filter(
+    (m) => m.to === to && (m.flags?.includes('c') || m.flags?.includes('e'))
+  );
+  if (recaps.length === 0) {
+    // No legal recapture — free capture (attacker just gains target material)
+    return true;
+  }
+
+  // There IS a recapture. Attacker's net = target - attacker (they lose their piece on recap).
+  // Winning only if net > 0, i.e. target is strictly more valuable than attacker.
+  return targetValue > attackerValue;
+}
+
 function materialCount(g: Chess, color: Color): number {
   const board = g.board();
   let total = 0;
@@ -48,13 +92,15 @@ function materialAfterLine(startFen: string, pv: string[], color: Color): number
   return materialCount(g, color);
 }
 
-// Find first capture in a PV (returns {attacker, captured, square, ply})
+// Find first WINNING capture in a PV (defender-aware — skips even trades and
+// losing captures like Nxb5 when b5 is defended by a rook).
 function firstCapture(
   startFen: string,
   pv: string[]
 ): { attackerType: PieceSymbol; capturedType: PieceSymbol; toSquare: string; ply: number } | null {
   const g = new Chess(startFen);
   let ply = 0;
+  let currentFen = startFen;
   for (const uci of pv) {
     if (uci.length < 4) break;
     const from = uci.slice(0, 2) as Square;
@@ -65,13 +111,19 @@ function firstCapture(
     try {
       const move = g.move({ from, to, promotion });
       ply++;
-      if (move && target && attacker) {
+      if (move && target && attacker && isWinningCapture(currentFen, uci)) {
         return { attackerType: attacker.type, capturedType: target.type, toSquare: to, ply };
       }
-      // En passant
-      if (move && move.flags.includes('e') && attacker) {
+      // En passant treated as pawn-takes-pawn, also defender-aware
+      if (
+        move &&
+        move.flags.includes('e') &&
+        attacker &&
+        isWinningCapture(currentFen, uci)
+      ) {
         return { attackerType: attacker.type, capturedType: 'p', toSquare: to, ply };
       }
+      currentFen = g.fen();
     } catch {
       break;
     }
@@ -265,6 +317,77 @@ export function explainMove(input: ExplainInput): CoachExplanation {
     hintBestMove: bestMoveSan,
     threatenedSquares: Array.from(threatenedSquares),
   };
+}
+
+/**
+ * Heuristic: find the best-looking response for the side to move at `fen`.
+ * Priority: mate-in-1 → winning capture (defender-aware) → check → null.
+ * Used by the coach to refute a student's wrong retry attempt without
+ * needing a full engine call.
+ */
+export function findRefutation(fen: string): {
+  uci: string;
+  san: string;
+  type: 'mate' | 'capture' | 'check';
+  captured?: PieceSymbol;
+} | null {
+  const g = new Chess(fen);
+  const moves = g.moves({ verbose: true }) as Array<{
+    from: string;
+    to: string;
+    san: string;
+    flags: string;
+    captured?: PieceSymbol;
+    piece: PieceSymbol;
+    promotion?: string;
+  }>;
+  if (moves.length === 0) return null;
+
+  // 1. Mate in 1
+  for (const m of moves) {
+    if (m.san.includes('#')) {
+      return {
+        uci: `${m.from}${m.to}${m.promotion || ''}`,
+        san: m.san,
+        type: 'mate',
+      };
+    }
+  }
+
+  // 2. Best winning capture (defender-aware)
+  const captures = moves.filter((m) => m.flags.includes('c') || m.flags.includes('e'));
+  let bestCap: (typeof moves)[0] | null = null;
+  let bestVal = 0;
+  for (const m of captures) {
+    const uci = `${m.from}${m.to}${m.promotion || ''}`;
+    if (!isWinningCapture(fen, uci)) continue;
+    const v = PIECE_VALUES[m.captured || 'p'] || 0;
+    if (v > bestVal) {
+      bestVal = v;
+      bestCap = m;
+    }
+  }
+  if (bestCap) {
+    return {
+      uci: `${bestCap.from}${bestCap.to}${bestCap.promotion || ''}`,
+      san: bestCap.san,
+      type: 'capture',
+      captured: bestCap.captured,
+    };
+  }
+
+  // 3. First check
+  for (const m of moves) {
+    if (m.san.includes('+')) {
+      return {
+        uci: `${m.from}${m.to}${m.promotion || ''}`,
+        san: m.san,
+        type: 'check',
+      };
+    }
+  }
+
+  return null;
 }
 
 export function severityLabel(nag: NagType): string {
