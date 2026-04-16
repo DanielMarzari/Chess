@@ -320,8 +320,50 @@ export function explainMove(input: ExplainInput): CoachExplanation {
 }
 
 /**
+ * Does the piece survive at its destination after this move?
+ * Used to filter out checks / moves where the piece would just be captured
+ * at a loss (e.g. Qxh2+ when the king simply takes the queen).
+ *
+ * Heuristic: one ply of exchange. If after the move, the opposing side can
+ * capture on the destination square with a piece of equal or lower value
+ * than ours, the move is considered "unsafe" — we'd come out behind.
+ */
+function movePieceSurvives(fen: string, uci: string): boolean {
+  if (uci.length < 4) return false;
+  const g = new Chess(fen);
+  const from = uci.slice(0, 2) as Square;
+  const to = uci.slice(2, 4) as Square;
+  const attacker = g.get(from);
+  if (!attacker) return false;
+  const attackerValue = PIECE_VALUES[attacker.type];
+  const target = g.get(to);
+  const targetValue = target ? PIECE_VALUES[target.type] : 0;
+
+  try {
+    g.move({ from, to, promotion: uci.slice(4, 5) || 'q' });
+  } catch {
+    return false;
+  }
+
+  // Any legal capture on `to` by the side now to move?
+  const replies = g.moves({ verbose: true }) as Array<{
+    to: string;
+    flags: string;
+    piece: PieceSymbol;
+  }>;
+  const capturesOfUs = replies.filter(
+    (r) => r.to === to && (r.flags.includes('c') || r.flags.includes('e'))
+  );
+  if (capturesOfUs.length === 0) return true;
+
+  // There IS a legal recapture. Our net = targetValue - attackerValue.
+  // The move is safe only if we come out at least even.
+  return targetValue >= attackerValue;
+}
+
+/**
  * Heuristic: find the best-looking response for the side to move at `fen`.
- * Priority: mate-in-1 → winning capture (defender-aware) → check → null.
+ * Priority: mate-in-1 → winning capture (defender-aware) → SAFE check → null.
  * Used by the coach to refute a student's wrong retry attempt without
  * needing a full engine call.
  */
@@ -376,15 +418,18 @@ export function findRefutation(fen: string): {
     };
   }
 
-  // 3. First check
+  // 3. Safe check — the piece giving check must not immediately hang.
+  // Without this, Qxh2+ (queen sacrifices itself next to the king) reads as
+  // a refutation; Kxh2 just wins the queen. Filter those out.
   for (const m of moves) {
-    if (m.san.includes('+')) {
-      return {
-        uci: `${m.from}${m.to}${m.promotion || ''}`,
-        san: m.san,
-        type: 'check',
-      };
-    }
+    if (!m.san.includes('+')) continue;
+    const uci = `${m.from}${m.to}${m.promotion || ''}`;
+    if (!movePieceSurvives(fen, uci)) continue;
+    return {
+      uci,
+      san: m.san,
+      type: 'check',
+    };
   }
 
   return null;
