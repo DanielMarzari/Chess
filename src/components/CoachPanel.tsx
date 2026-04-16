@@ -7,6 +7,9 @@ import { severityLabel } from '@/lib/coaching';
 
 export type CoachSubPhase =
   | 'analyzing' // engine still computing best move
+  | 'pausing' // brief "coach activated" beat before demo starts
+  | 'demo' // auto-playing the consequences of the bad move
+  | 'rewinding' // brief visual before returning to pre-move position
   | 'explain' // showing what went wrong + prompt to try again
   | 'retry-wrong' // just tried but it wasn't right
   | 'retry-correct' // just tried and it was a good move
@@ -60,19 +63,53 @@ export default function CoachPanel({
           </div>
         )}
 
-        {/* The move that triggered coaching */}
-        {subPhase !== 'analyzing' && (
+        {subPhase === 'pausing' && (
+          <div className="text-[var(--foreground-strong)]">
+            Hold up —{' '}
+            <span className="font-mono font-bold">{badMoveSan}</span> looks shaky. Let me show
+            you what happens…
+          </div>
+        )}
+
+        {subPhase === 'demo' && (
+          <div className="text-[var(--foreground)] text-[13px] leading-relaxed">
+            Watch what your opponent can do after{' '}
+            <span className="font-mono font-bold text-[var(--foreground-strong)]">{badMoveSan}</span>.
+          </div>
+        )}
+
+        {subPhase === 'rewinding' && (
+          <div className="text-[var(--muted)] flex items-center gap-2">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+            Rewinding to before your move…
+          </div>
+        )}
+
+        {/* The move that triggered coaching (shown after demo) */}
+        {(subPhase === 'explain' ||
+          subPhase === 'retry-wrong' ||
+          subPhase === 'retry-correct' ||
+          subPhase === 'reveal' ||
+          subPhase === 'done') && (
           <div className="text-xs text-[var(--muted)]">
-            Your move: <span className="font-mono font-bold text-[var(--foreground-strong)]">{badMoveSan}</span>
+            Your move:{' '}
+            <span className="font-mono font-bold text-[var(--foreground-strong)]">
+              {badMoveSan}
+            </span>
           </div>
         )}
 
         {/* Explanation of what went wrong */}
-        {explanation && subPhase !== 'analyzing' && (
-          <div className="text-[13px] leading-relaxed text-[var(--foreground)]">
-            {explanation.whyBad}
-          </div>
-        )}
+        {explanation &&
+          (subPhase === 'explain' ||
+            subPhase === 'retry-wrong' ||
+            subPhase === 'retry-correct' ||
+            subPhase === 'reveal' ||
+            subPhase === 'done') && (
+            <div className="text-[13px] leading-relaxed text-[var(--foreground)]">
+              {explanation.whyBad}
+            </div>
+          )}
 
         {/* Phase-specific prompts */}
         {subPhase === 'explain' && (

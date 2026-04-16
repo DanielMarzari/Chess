@@ -85,6 +85,13 @@ export default function Home() {
   const coachMoverRef = useRef<'w' | 'b'>('w');
   // NAGs we've already coached on (moveIndex set) to avoid re-triggering
   const coachedIndicesRef = useRef<Set<number>>(new Set());
+  // Position override — when non-null, the chessboard shows THIS fen instead
+  // of game.fen(). Used during the demo playout of the bad move's consequences.
+  const [demoPosition, setDemoPosition] = useState<string | null>(null);
+  // An arrow drawn on the board (during demo, previews the upcoming move).
+  const [demoArrow, setDemoArrow] = useState<{ from: Square; to: Square; color?: string } | null>(null);
+  // The refutation PV we captured from the engine at trigger time (UCI moves).
+  const coachRefutationRef = useRef<string[]>([]);
 
   const sf = useStockfish();
   const sound = useSound();
@@ -182,22 +189,22 @@ export default function Home() {
     coachBadIndexRef.current = lastIdx;
     coachMoverRef.current = mover;
 
-    // Rewind the game state by one ply so the user can try again.
-    const newHistory = moveHistory.slice(0, lastIdx);
-    const newPositions = positions.slice(0, lastIdx + 1);
-    setMoveHistory(newHistory);
-    setPositions(newPositions);
-    setCurrentMoveIndex(newHistory.length - 1);
-    setGame(new Chess(preFen));
-    setMoveEvals((p) => p.slice(0, newHistory.length));
-    setNags((p) => p.slice(0, newHistory.length));
+    // Capture the refutation: the engine's best line from the CURRENT
+    // (post-bad-move) position. sf.lines was analyzing that position right
+    // before we got here. Keep a few half-moves to play out.
+    const pv = sf.lines[0]?.pv?.trim().split(/\s+/).filter(Boolean) ?? [];
+    coachRefutationRef.current = pv.slice(0, 4);
 
-    // Pause the clock while we teach.
+    // DO NOT rewind the game state yet. We want the user to see their move
+    // finish animating, then the demo plays out the consequences, THEN we
+    // rewind to the pre-move position for the explanation + retry.
+
+    // Pause the clock immediately so no time bleeds during the lesson.
     clockRef.current.pause();
 
-    // Activate coach; explanation will be built once engine analyzes preFen.
+    // Activate coach; demo starts after a brief pause.
     setCoachActive(true);
-    setCoachSubPhase('analyzing');
+    setCoachSubPhase('pausing');
     setCoachExplanation(null);
     setCoachAttemptsLeft(3);
     setCoachBadMoveSan(badSan);
@@ -205,7 +212,125 @@ export default function Home() {
     coachBestMoveUciRef.current = null;
     coachBestPvRef.current = [];
     coachResponsePvRef.current = [];
-  }, [gamePhase, committedMode, coachActive, moveHistory, nags, moveEvals, computerPlays, positions]);
+    // Also store the current engine's PV as the "refutation response" so the
+    // heuristic explainer has something concrete to point at.
+    if (pv.length > 0) coachResponsePvRef.current = pv.slice(0, 2);
+  }, [gamePhase, committedMode, coachActive, moveHistory, nags, moveEvals, computerPlays, positions, sf.lines]);
+
+  // Transition 'pausing' → 'demo' after a short beat.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'pausing') return;
+    const t = setTimeout(() => {
+      // Seed demo position at the post-bad-move FEN (what's currently on the board)
+      const postBadFen = positions[coachBadIndexRef.current + 1] || null;
+      if (postBadFen && coachRefutationRef.current.length > 0) {
+        setDemoPosition(postBadFen);
+        setCoachSubPhase('demo');
+      } else {
+        // No refutation line available (engine didn't get far enough in time) —
+        // skip the demo and go straight to rewinding.
+        setCoachSubPhase('rewinding');
+      }
+    }, 900);
+    return () => clearTimeout(t);
+  }, [coachActive, coachSubPhase, positions]);
+
+  // Demo playback: advance through the refutation moves with animated arrows.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'demo') return;
+    const moves = coachRefutationRef.current;
+    if (moves.length === 0) {
+      setCoachSubPhase('rewinding');
+      return;
+    }
+
+    let cancelled = false;
+    const postBadFen = positions[coachBadIndexRef.current + 1] || positions[0];
+    let currentPos = postBadFen;
+    let idx = 0;
+
+    const playNext = () => {
+      if (cancelled) return;
+      if (idx >= moves.length) {
+        // Demo done — dwell on the final position so the student can absorb it
+        setTimeout(() => {
+          if (cancelled) return;
+          setDemoArrow(null);
+          setCoachSubPhase('rewinding');
+        }, 1400);
+        return;
+      }
+
+      const uci = moves[idx];
+      if (!uci || uci.length < 4) {
+        setCoachSubPhase('rewinding');
+        return;
+      }
+
+      // Show the arrow first so the user sees what's about to happen
+      const arrowColor = idx % 2 === 0 ? '#dc322f' : '#3893e8';
+      setDemoArrow({ from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, color: arrowColor });
+
+      const arrowTimer = setTimeout(() => {
+        if (cancelled) return;
+        const g = new Chess(currentPos);
+        try {
+          const m = g.move({
+            from: uci.slice(0, 2),
+            to: uci.slice(2, 4),
+            promotion: uci.slice(4, 5) || 'q',
+          });
+          if (m?.captured) soundRef.current.play('capture');
+          else if (g.inCheck()) soundRef.current.play('check');
+          else soundRef.current.play('move');
+          currentPos = g.fen();
+          setDemoPosition(currentPos);
+          setDemoArrow(null);
+          idx++;
+          setTimeout(playNext, 900);
+        } catch {
+          setCoachSubPhase('rewinding');
+        }
+      }, 800);
+
+      // Timer cleanup handled by outer cancelled flag
+      void arrowTimer;
+    };
+
+    // Initial delay before the first demo move
+    const kick = setTimeout(playNext, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(kick);
+    };
+  }, [coachActive, coachSubPhase, positions]);
+
+  // Transition 'rewinding' → 'explain': actually rewind the game state now.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'rewinding') return;
+    const t = setTimeout(() => {
+      // Clear demo overrides
+      setDemoPosition(null);
+      setDemoArrow(null);
+
+      // Rewind the game state by removing the bad move from history.
+      const badIdx = coachBadIndexRef.current;
+      const preFen = coachPreFenRef.current;
+      if (badIdx < 0 || !preFen) {
+        setCoachSubPhase('explain');
+        return;
+      }
+      setMoveHistory((prev) => prev.slice(0, badIdx));
+      setPositions((prev) => prev.slice(0, badIdx + 1));
+      setCurrentMoveIndex(badIdx - 1);
+      setGame(new Chess(preFen));
+      setMoveEvals((p) => p.slice(0, badIdx));
+      setNags((p) => p.slice(0, badIdx));
+
+      setCoachSubPhase('analyzing'); // wait for engine to reanalyze preFen for the explanation
+    }, 650);
+    return () => clearTimeout(t);
+  }, [coachActive, coachSubPhase]);
 
   // While coach is active, capture engine's best line from preFen (analysis
   // is already running because positions/currentMoveIndex changed).
@@ -468,6 +593,17 @@ export default function Home() {
   const onPieceDrop = useCallback(
     (source: string, target: string): boolean => {
       if (gamePhase !== 'playing') return false;
+
+      // Block all interaction while the coach is in pausing/demo/rewind states
+      if (
+        coachActive &&
+        (coachSubPhase === 'pausing' ||
+          coachSubPhase === 'demo' ||
+          coachSubPhase === 'rewinding' ||
+          coachSubPhase === 'analyzing')
+      ) {
+        return false;
+      }
 
       if (coachActive && (coachSubPhase === 'explain' || coachSubPhase === 'retry-wrong')) {
         // User is trying to find a better move
@@ -858,15 +994,22 @@ export default function Home() {
     !coachActive &&
     !!computerPlays;
 
-  // When reveal phase shows the best move, overlay an arrow on the board
-  const coachArrow: { from: Square; to: Square; color?: string } | null =
-    coachActive && coachSubPhase === 'reveal' && coachBestMoveUciRef.current
+  // Arrow priority during coaching: demo > reveal > hover
+  const coachArrow: { from: Square; to: Square; color?: string } | null = demoArrow
+    ? demoArrow
+    : coachActive && coachSubPhase === 'reveal' && coachBestMoveUciRef.current
       ? {
           from: coachBestMoveUciRef.current.slice(0, 2) as Square,
           to: coachBestMoveUciRef.current.slice(2, 4) as Square,
           color: '#759900',
         }
       : hoverArrow;
+
+  // When demo is running, the board shows a different position from game state.
+  const boardPosition = demoPosition ?? currentFen;
+  const isCoachBusy =
+    coachActive &&
+    (coachSubPhase === 'pausing' || coachSubPhase === 'demo' || coachSubPhase === 'rewinding' || coachSubPhase === 'analyzing');
 
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
@@ -899,17 +1042,45 @@ export default function Home() {
             />
           )}
 
-          <ChessBoard
-            ref={boardRef}
-            position={currentFen}
-            onPieceDrop={onPieceDrop}
-            boardOrientation={boardOrientation}
-            boardWidth={BOARD_WIDTH}
-            showCoords={showCoords}
-            lastMove={lastMove}
-            externalArrow={coachArrow}
-            allowPremoves={allowPremoves}
-          />
+          <div className="relative">
+            <ChessBoard
+              ref={boardRef}
+              position={boardPosition}
+              onPieceDrop={onPieceDrop}
+              boardOrientation={boardOrientation}
+              boardWidth={BOARD_WIDTH}
+              showCoords={showCoords}
+              lastMove={demoPosition ? null : lastMove}
+              externalArrow={coachArrow}
+              allowPremoves={allowPremoves && !isCoachBusy}
+            />
+            {/* Coach overlay — dims the board and labels the state while
+                the coach is running demos/transitions. Drops are already
+                blocked at the handler level. */}
+            {coachActive && (
+              <div className="pointer-events-none absolute inset-0 flex items-start justify-end p-2">
+                <div className="flex items-center gap-1.5 bg-[var(--accent)] text-white px-2 py-1 rounded-full shadow text-[10px] font-semibold uppercase tracking-wider">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  {coachSubPhase === 'pausing' && 'Paused'}
+                  {coachSubPhase === 'demo' && 'Coach · watching'}
+                  {coachSubPhase === 'rewinding' && 'Rewinding'}
+                  {coachSubPhase === 'analyzing' && 'Analyzing'}
+                  {coachSubPhase === 'explain' && 'Coach · your turn'}
+                  {coachSubPhase === 'retry-wrong' && 'Try again'}
+                  {coachSubPhase === 'retry-correct' && 'Nice!'}
+                  {coachSubPhase === 'reveal' && 'Answer revealed'}
+                  {coachSubPhase === 'done' && 'Coach'}
+                </div>
+              </div>
+            )}
+            {/* Dim + ring animation for the demo/rewind beats */}
+            {isCoachBusy && (
+              <div
+                className="pointer-events-none absolute inset-0 ring-2 ring-[var(--accent)]/60 rounded"
+                style={{ boxShadow: '0 0 24px rgba(117,153,0,0.25) inset' }}
+              />
+            )}
+          </div>
 
           {clock.tc && gamePhase !== 'setup' && (
             <ClockDisplay
