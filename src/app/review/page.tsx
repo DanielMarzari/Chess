@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Game } from '@/lib/queries';
 import ProgressGraph from '@/components/ProgressGraph';
+import RatingScatter from '@/components/RatingScatter';
 
 type Bucket = {
   label: string;
@@ -259,6 +260,9 @@ export default function ReviewPage() {
 
       {/* Progress trend — rating over time from recorded user_rating snapshots */}
       <ProgressGraph games={games} outcomeOf={(g) => gameOutcome(g).result} />
+
+      {/* Rating scatter — your ELO vs opponent ELO for each finished game */}
+      <RatingScatter games={games} outcomeOf={(g) => gameOutcome(g).result} />
 
       {/* Favorite opening — separate card row so the four-card grid above is even */}
       {stats.topOpening && (

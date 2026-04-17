@@ -21,22 +21,26 @@ interface ProgressGraphProps {
 }
 
 const OUTCOME_COLOR: Record<Exclude<Outcome, null>, string> = {
-  win: '#22c55e', // green
-  loss: '#ef4444', // red
-  draw: '#94a3b8', // slate
-  ongoing: '#eab308', // amber
+  win: '#22c55e',
+  loss: '#ef4444',
+  draw: '#94a3b8',
+  ongoing: '#eab308',
 };
 
-const HEIGHT = 180;
+const HEIGHT = 200;
 const PAD_TOP = 16;
-const PAD_BOTTOM = 26;
-const PAD_LEFT = 40;
-const PAD_RIGHT = 12;
+const PAD_BOTTOM = 32;
+const PAD_LEFT = 44;
+const PAD_RIGHT = 16;
+
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) {
   const [hover, setHover] = useState<ProgressPoint | null>(null);
 
-  // Build chronological series of games with a recorded user_rating.
   const points: ProgressPoint[] = [...games]
     .sort((a, b) => (a.created_at < b.created_at ? -1 : 1))
     .filter((g) => typeof g.user_rating === 'number')
@@ -66,7 +70,6 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
     );
   }
 
-  // Y-axis scale — add a little padding either side so extremes don't hug edges
   const ratings = points.map((p) => p.rating);
   const minR = Math.min(...ratings);
   const maxR = Math.max(...ratings);
@@ -74,9 +77,8 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
   const yMin = Math.floor((minR - rawRange * 0.15) / 10) * 10;
   const yMax = Math.ceil((maxR + rawRange * 0.15) / 10) * 10;
 
-  // Responsive width via viewBox. We fix the intrinsic coordinate space at
-  // an ample width; the SVG scales to container.
-  const width = Math.max(320, points.length * 32);
+  // Graph grows with number of points but stays compact by default
+  const width = Math.max(480, points.length * 42);
   const innerW = width - PAD_LEFT - PAD_RIGHT;
   const innerH = HEIGHT - PAD_TOP - PAD_BOTTOM;
   const stepX = points.length > 1 ? innerW / (points.length - 1) : 0;
@@ -88,14 +90,22 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
   const linePath = points
     .map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(i)} ${y(p.rating)}`)
     .join(' ');
-
-  // Area fill below the line
   const areaPath = `${linePath} L ${x(points.length - 1)} ${PAD_TOP + innerH} L ${x(0)} ${PAD_TOP + innerH} Z`;
 
-  // Y-axis ticks: min, middle, max
   const ticks = [yMin, Math.round((yMin + yMax) / 2), yMax];
 
-  // Recent-N rolling win rate (last 5 games)
+  // X-axis label strategy — avoid overlap by limiting count based on
+  // available width. Pick the first + last, plus one middle if there's
+  // room (≥ 140 px between labels).
+  const labelIndices: number[] = [];
+  labelIndices.push(0);
+  if (stepX * (points.length - 1) >= 280) {
+    labelIndices.push(Math.floor((points.length - 1) / 2));
+  }
+  if (points.length > 1) labelIndices.push(points.length - 1);
+  const uniqueLabels = Array.from(new Set(labelIndices));
+
+  // Rolling last-5 score + rating delta
   const recentN = Math.min(5, points.length);
   const recentSlice = points.slice(-recentN);
   const finished = recentSlice.filter(
@@ -110,8 +120,9 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
           finished.length) *
         100
       : null;
-
-  const ratingDelta = points[points.length - 1].rating - points[0].rating;
+  const ratingDelta = Math.round(
+    points[points.length - 1].rating - points[0].rating
+  );
 
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3">
@@ -137,7 +148,11 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
           </span>
           {recentScore !== null && (
             <span className="text-[var(--muted)]">
-              Last {recentN}: <span className="text-[var(--foreground-strong)] font-mono">{recentScore.toFixed(0)}%</span> score
+              Last {recentN}:{' '}
+              <span className="text-[var(--foreground-strong)] font-mono">
+                {Math.round(recentScore)}%
+              </span>{' '}
+              score
             </span>
           )}
         </div>
@@ -150,7 +165,7 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
           style={{ width: '100%', minWidth: `${width}px`, height: HEIGHT }}
           preserveAspectRatio="none"
         >
-          {/* Y-axis gridlines */}
+          {/* Gridlines */}
           {ticks.map((t) => (
             <g key={t}>
               <line
@@ -163,7 +178,7 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
                 opacity="0.5"
               />
               <text
-                x={PAD_LEFT - 6}
+                x={PAD_LEFT - 8}
                 y={y(t) + 3}
                 textAnchor="end"
                 fontSize="10"
@@ -175,27 +190,37 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
             </g>
           ))}
 
-          {/* X-axis labels (first, middle, last) */}
-          {[0, Math.floor(points.length / 2), points.length - 1]
-            .filter((i, idx, arr) => arr.indexOf(i) === idx)
-            .map((i) => {
-              const p = points[i];
-              const label =
-                i === 0 ? `Game 1` : i === points.length - 1 ? `Game ${points.length}` : `Game ${i + 1}`;
-              return (
+          {/* X-axis labels */}
+          {uniqueLabels.map((i) => {
+            const p = points[i];
+            const anchor =
+              i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle';
+            return (
+              <g key={i}>
                 <text
-                  key={i}
                   x={x(i)}
-                  y={HEIGHT - 8}
-                  textAnchor={i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle'}
+                  y={HEIGHT - 14}
+                  textAnchor={anchor}
                   fontSize="10"
                   fontFamily="monospace"
                   fill="var(--muted)"
                 >
-                  {label} · {new Date(p.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  {fmtDate(p.date)}
                 </text>
-              );
-            })}
+                <text
+                  x={x(i)}
+                  y={HEIGHT - 3}
+                  textAnchor={anchor}
+                  fontSize="9"
+                  fontFamily="monospace"
+                  fill="var(--muted)"
+                  opacity="0.7"
+                >
+                  game {i + 1}
+                </text>
+              </g>
+            );
+          })}
 
           {/* Area + line */}
           <path d={areaPath} fill="var(--accent)" opacity="0.08" />
@@ -205,25 +230,23 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
           {points.map((p, i) => {
             const color = p.outcome ? OUTCOME_COLOR[p.outcome] : 'var(--muted)';
             return (
-              <g key={i}>
-                <circle
-                  cx={x(i)}
-                  cy={y(p.rating)}
-                  r={hover?.idx === i ? 5 : 3.5}
-                  fill={color}
-                  stroke="var(--surface)"
-                  strokeWidth="1.5"
-                  onMouseEnter={() => setHover(p)}
-                  onMouseLeave={() => setHover(null)}
-                  className="cursor-pointer transition-all"
-                />
-              </g>
+              <circle
+                key={i}
+                cx={x(i)}
+                cy={y(p.rating)}
+                r={hover?.idx === i ? 5 : 3.5}
+                fill={color}
+                stroke="var(--surface)"
+                strokeWidth="1.5"
+                onMouseEnter={() => setHover(p)}
+                onMouseLeave={() => setHover(null)}
+                className="cursor-pointer transition-all"
+              />
             );
           })}
         </svg>
       </div>
 
-      {/* Legend + hover card */}
       <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
         <div className="flex items-center gap-3 text-[var(--muted)]">
           <LegendDot color={OUTCOME_COLOR.win} label="Win" />
@@ -233,7 +256,7 @@ export default function ProgressGraph({ games, outcomeOf }: ProgressGraphProps) 
         </div>
         {hover && (
           <div className="text-xs text-[var(--foreground)] font-mono">
-            Game {hover.idx + 1} · {hover.rating} ELO
+            Game {hover.idx + 1} · {hover.rating} ELO · {fmtDate(hover.date)}
             {hover.coachingMoments > 0 && (
               <span className="ml-2 text-[var(--accent)]">🎓 {hover.coachingMoments}</span>
             )}
