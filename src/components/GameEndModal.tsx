@@ -20,6 +20,9 @@ interface GameEndModalProps {
   onClose: () => void;
   onNewGame: () => void;
   onAnalyze: () => void;
+  gameId?: number;
+  onReview?: () => void;
+  showReviewButton?: boolean;
 }
 
 function countNagsByColor(nags: (NagType | null)[]): {
@@ -45,6 +48,9 @@ export default function GameEndModal({
   onClose,
   onNewGame,
   onAnalyze,
+  gameId,
+  onReview,
+  showReviewButton,
 }: GameEndModalProps) {
   if (!result) return null;
 
@@ -193,18 +199,37 @@ export default function GameEndModal({
         )}
 
         <div className="border-t border-[var(--border)] p-3 flex gap-2">
-          <button
-            onClick={onAnalyze}
-            className="flex-1 py-2 rounded text-sm bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--border)] transition-colors"
-          >
-            Review
-          </button>
-          <button
-            onClick={onNewGame}
-            className="flex-1 py-2 rounded text-sm bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors font-semibold"
-          >
-            New Game
-          </button>
+          {showReviewButton && gameId && onReview ? (
+            <>
+              <button
+                onClick={onReview}
+                className="flex-1 py-2 rounded text-sm bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--border)] transition-colors"
+              >
+                Game Review
+              </button>
+              <button
+                onClick={onNewGame}
+                className="flex-1 py-2 rounded text-sm bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors font-semibold"
+              >
+                New Game
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={onAnalyze}
+                className="flex-1 py-2 rounded text-sm bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--border)] transition-colors"
+              >
+                Review
+              </button>
+              <button
+                onClick={onNewGame}
+                className="flex-1 py-2 rounded text-sm bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors font-semibold"
+              >
+                New Game
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

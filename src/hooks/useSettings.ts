@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 export type Notation = 'san' | 'figurine' | 'long';
+export type CoachingMode = 'live' | 'review' | 'both';
 
 export interface Settings {
   coachOnBlunder: boolean;
@@ -13,6 +14,7 @@ export interface Settings {
   // benefit from positional-only lessons, and the demos can feel pedantic.
   coachOnPositional: boolean;
   notation: Notation;
+  coachingMode: CoachingMode;
 }
 
 const DEFAULTS: Settings = {
@@ -21,6 +23,7 @@ const DEFAULTS: Settings = {
   coachOnInaccuracy: true,
   coachOnPositional: false,
   notation: 'san',
+  coachingMode: 'live',
 };
 
 function read(): Settings {
@@ -28,12 +31,16 @@ function read(): Settings {
   try {
     const ln = localStorage.getItem('notation');
     const notation: Notation = ln === 'figurine' || ln === 'long' ? ln : 'san';
+    const cm = localStorage.getItem('coachingMode');
+    const coachingMode: CoachingMode =
+      cm === 'live' || cm === 'review' || cm === 'both' ? cm : 'live';
     return {
       coachOnBlunder: localStorage.getItem('coachOnBlunder') !== 'false',
       coachOnMistake: localStorage.getItem('coachOnMistake') !== 'false',
       coachOnInaccuracy: localStorage.getItem('coachOnInaccuracy') !== 'false',
       coachOnPositional: localStorage.getItem('coachOnPositional') === 'true',
       notation,
+      coachingMode,
     };
   } catch {
     return DEFAULTS;

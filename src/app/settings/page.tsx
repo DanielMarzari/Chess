@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import ThemeToggle from '@/components/ThemeToggle';
 import { Check, Volume2, Palette, Square, GraduationCap, Type } from 'lucide-react';
-import { useSettings, writeSetting, type Notation } from '@/hooks/useSettings';
+import { useSettings, writeSetting, type Notation, type CoachingMode } from '@/hooks/useSettings';
 import { NAG_META } from '@/lib/accuracy';
 
 const BOARD_THEMES = [
@@ -84,6 +84,11 @@ export default function SettingsPage() {
   function setNotation(value: Notation) {
     writeSetting('notation', value);
     flash('notation');
+  }
+
+  function setCoachingMode(value: CoachingMode) {
+    writeSetting('coachingMode', value);
+    flash('coachingMode');
   }
 
   return (
@@ -191,9 +196,46 @@ export default function SettingsPage() {
         <h2 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] border-b border-[var(--border)] pb-1">
           Training (Coach)
         </h2>
+
+        {/* Coaching Mode */}
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <GraduationCap size={16} className="text-[var(--muted)]" />
+            <span>When to coach</span>
+            <SavedBadge visible={flashKey === 'coachingMode'} />
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {(['live', 'review', 'both'] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setCoachingMode(mode)}
+                className={`rounded border-2 p-3 transition-colors text-left text-sm ${
+                  settings.coachingMode === mode
+                    ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                    : 'border-[var(--border)] hover:border-[var(--muted)]'
+                }`}
+              >
+                <div className="font-medium text-xs uppercase tracking-wider">
+                  {mode === 'live'
+                    ? 'Live'
+                    : mode === 'review'
+                    ? 'Review'
+                    : 'Both'}
+                </div>
+                <div className="text-xs text-[var(--muted)] mt-1">
+                  {mode === 'live'
+                    ? 'During game'
+                    : mode === 'review'
+                    ? 'After game'
+                    : 'Both times'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex items-center gap-2 mb-2">
-          <GraduationCap size={16} className="text-[var(--muted)]" />
-          <span>When should the coach interrupt?</span>
+          <span className="text-sm font-medium">Which moves to coach on</span>
         </div>
         <div className="space-y-1">
           <CoachToggleButton
