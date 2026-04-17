@@ -23,7 +23,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval } from '@/lib/accuracy';
 import { identifyOpening } from '@/lib/openings';
 import { buildPgn, todayTag } from '@/lib/pgn';
-import { explainMove, isWinningCapture, findRefutation, type CoachExplanation } from '@/lib/coaching';
+import { explainMove, isWinningCapture, type CoachExplanation } from '@/lib/coaching';
 
 const BOARD_WIDTH = 560;
 
@@ -383,8 +383,96 @@ export default function PlayView({
     };
   }, [coachActive, coachSubPhase, positions]);
 
-  // Retry-demo: play out the opponent's refutation of a wrong attempt,
-  // then rewind back to preFen and enter retry-wrong.
+  // ----- Retry-analyzing → retry-demo --------------------------------------
+  // After the user plays a wrong retry attempt, we hand the engine the
+  // post-attempt FEN and wait for a usable PV. Then we either:
+  //   - play it out (if the eval drop is meaningful), OR
+  //   - skip the demo and tell the user it was a reasonable move
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'retry-analyzing') return;
+    if (sf.lines.length === 0) return;
+
+    const primary = sf.lines[0];
+    if (primary.depth < 12) return;
+
+    const attemptFen = retryDemoStartFenRef.current;
+    if (!attemptFen) {
+      setCoachSubPhase('retry-wrong');
+      return;
+    }
+
+    const pvTokens = primary.pv.trim().split(/\s+/).filter(Boolean);
+    if (pvTokens.length === 0) return;
+
+    // Staleness guard: PV's first move must be legal at attemptFen.
+    try {
+      const g = new Chess(attemptFen);
+      const r = g.move({
+        from: pvTokens[0].slice(0, 2),
+        to: pvTokens[0].slice(2, 4),
+        promotion: pvTokens[0].slice(4, 5) || 'q',
+      });
+      if (!r) return;
+    } catch {
+      return;
+    }
+
+    // Eval drop FROM THE STUDENT'S PERSPECTIVE.
+    // sf normalizes scores to white's POV; convert to mover's POV.
+    const evalBeforeWhite = coachEvalsRef.current.before;
+    const evalAfterWhite = primary.mate !== null
+      ? primary.mate > 0 ? 10000 : -10000
+      : primary.score;
+    const mover = coachMoverRef.current;
+    const dropForMover =
+      mover === 'w' ? evalBeforeWhite - evalAfterWhite : evalAfterWhite - evalBeforeWhite;
+
+    // Best-move SAN from preFen (already captured during the main analysis)
+    const preFen = coachPreFenRef.current;
+    const bestUci = coachBestMoveUciRef.current;
+    let bestSan = '';
+    if (preFen && bestUci) {
+      try {
+        const g = new Chess(preFen);
+        const m = g.move({
+          from: bestUci.slice(0, 2),
+          to: bestUci.slice(2, 4),
+          promotion: bestUci.slice(4, 5) || 'q',
+        });
+        if (m) bestSan = m.san;
+      } catch {
+        bestSan = '';
+      }
+    }
+
+    // If the eval barely budged, this is an honest "fine but not best" call —
+    // skip the demo and just say so.
+    const SMALL_DROP_CP = 50;
+    if (dropForMover < SMALL_DROP_CP) {
+      const dropPawns = Math.max(0, dropForMover) / 100;
+      setRetryRefutationText(
+        bestSan
+          ? `That's a reasonable move — the engine just slightly prefers ${bestSan} (about ${dropPawns.toFixed(1)} pawns better).`
+          : `That's a reasonable move — engine prefers a different square.`
+      );
+      setDemoPosition(null);
+      setDemoArrow(null);
+      const remaining = coachAttemptsLeft - 1;
+      setCoachAttemptsLeft(remaining);
+      if (remaining <= 0) setCoachSubPhase('reveal');
+      else setCoachSubPhase('retry-wrong');
+      return;
+    }
+
+    // Real refutation incoming — capture the PV (up to 14 half-moves) and
+    // let the demo effect play it out.
+    retryDemoQueueRef.current = pvTokens.slice(0, 14);
+    setCoachSubPhase('retry-demo');
+  }, [coachActive, coachSubPhase, sf.lines, coachAttemptsLeft]);
+
+  // Retry-demo: play through the engine's refutation line until the
+  // material/positional advantage is exposed (or we hit the cap), then
+  // rewind to preFen and enter retry-wrong with appropriate text.
   useEffect(() => {
     if (!coachActive || coachSubPhase !== 'retry-demo') return;
 
@@ -392,7 +480,6 @@ export default function PlayView({
     const queue = retryDemoQueueRef.current;
     const startFen = retryDemoStartFenRef.current;
     if (!startFen || queue.length === 0) {
-      // Fallback: straight to retry-wrong
       setDemoPosition(null);
       setDemoArrow(null);
       setCoachSubPhase('retry-wrong');
@@ -400,16 +487,60 @@ export default function PlayView({
     }
 
     let pos = startFen;
+    let idx = 0;
+    const mover = coachMoverRef.current;
+    const startBalance = relativeMaterial(startFen, mover);
+    let exposedAtIdx: number | null = null;
+    let observedMate = false;
+    const MAX_HALF_MOVES = 12;
+    const MIN_AFTER_EXPOSURE = 1;
 
-    const playOne = () => {
+    const finishDemo = () => {
       if (cancelled) return;
-      const uci = queue[0];
-      const arrowColor = '#dc322f';
+      setDemoPosition(null);
+      setDemoArrow(null);
+
+      // Build a description of what the user just watched
+      const finalBalance = relativeMaterial(pos, mover);
+      const delta = startBalance - finalBalance;
+      let text: string;
+      if (observedMate) {
+        text = `That line ends in a forced mate against you.`;
+      } else if (delta >= 2) {
+        text = `That line costs you about ${delta.toFixed(0)} pawns of material.`;
+      } else if (delta >= 1) {
+        text = `That line drops about ${delta.toFixed(0)} pawn worth of material or position.`;
+      } else {
+        text = `Engine plays out that line and your position holds up — but it's not the strongest reply available.`;
+      }
+      setRetryRefutationText(text);
+
+      const remaining = coachAttemptsLeft - 1;
+      setCoachAttemptsLeft(remaining);
+      if (remaining <= 0) setCoachSubPhase('reveal');
+      else setCoachSubPhase('retry-wrong');
+    };
+
+    const playNext = () => {
+      if (cancelled) return;
+      if (idx >= queue.length || idx >= MAX_HALF_MOVES) {
+        setTimeout(finishDemo, 1200);
+        return;
+      }
+
+      const uci = queue[idx];
+      if (!uci || uci.length < 4) {
+        finishDemo();
+        return;
+      }
+
+      const arrowColor = idx % 2 === 0 ? '#dc322f' : '#3893e8';
       setDemoArrow({
         from: uci.slice(0, 2) as Square,
         to: uci.slice(2, 4) as Square,
         color: arrowColor,
       });
+
       setTimeout(() => {
         if (cancelled) return;
         const g = new Chess(pos);
@@ -425,25 +556,32 @@ export default function PlayView({
           pos = g.fen();
           setDemoPosition(pos);
           setDemoArrow(null);
-          // Dwell, then rewind to preFen and enter retry-wrong
-          setTimeout(() => {
-            if (cancelled) return;
-            setDemoPosition(null);
-            setDemoArrow(null);
-            const remaining = coachAttemptsLeft - 1;
-            setCoachAttemptsLeft(remaining);
-            if (remaining <= 0) setCoachSubPhase('reveal');
-            else setCoachSubPhase('retry-wrong');
-          }, 1300);
+          idx++;
+
+          const balance = relativeMaterial(pos, mover);
+          const delta = startBalance - balance;
+          const isTerminal = g.isGameOver();
+          if (isTerminal && g.isCheckmate()) observedMate = true;
+
+          if (exposedAtIdx === null && (delta >= 2 || isTerminal)) {
+            exposedAtIdx = idx - 1;
+          }
+          const reachedFollowup =
+            exposedAtIdx !== null && idx >= exposedAtIdx + 1 + MIN_AFTER_EXPOSURE;
+
+          if (isTerminal || reachedFollowup) {
+            setTimeout(finishDemo, 1300);
+            return;
+          }
+
+          setTimeout(playNext, 850);
         } catch {
-          setDemoPosition(null);
-          setDemoArrow(null);
-          setCoachSubPhase('retry-wrong');
+          finishDemo();
         }
       }, 700);
     };
 
-    const kick = setTimeout(playOne, 350);
+    const kick = setTimeout(playNext, 350);
     return () => {
       cancelled = true;
       clearTimeout(kick);
@@ -777,7 +915,9 @@ export default function PlayView({
         (coachSubPhase === 'pausing' ||
           coachSubPhase === 'demo' ||
           coachSubPhase === 'rewinding' ||
-          coachSubPhase === 'analyzing')
+          coachSubPhase === 'analyzing' ||
+          coachSubPhase === 'retry-analyzing' ||
+          coachSubPhase === 'retry-demo')
       ) {
         return false;
       }
@@ -810,40 +950,22 @@ export default function PlayView({
           return false;
         }
 
-        // Wrong attempt — instead of just saying "try again", demo what would
-        // actually happen. Find the opponent's best response at the attempt
-        // position and play it out on the board.
+        // Wrong attempt — kick the engine onto the post-attempt position so
+        // we can show a real refutation. The 'retry-analyzing' effect will
+        // wait for engine depth, decide whether the move is genuinely bad
+        // (eval drop ≥ 50cp), and either play out the line or print an
+        // honest "reasonable, just not best" message.
         const attemptFen = tryGame.fen();
         soundRef.current.play('move');
         setCoachLastAttemptSan(tried.san);
-
-        const refutation = findRefutation(attemptFen);
-        if (refutation) {
-          // Set up a short retry-demo (1 half-move: opponent's best reply)
-          retryDemoQueueRef.current = [refutation.uci];
-          retryDemoStartFenRef.current = attemptFen;
-          const text =
-            refutation.type === 'mate'
-              ? `After that, ${refutation.san} is checkmate.`
-              : refutation.type === 'capture' && refutation.captured
-                ? `After that, ${refutation.san} wins your ${
-                    { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[refutation.captured] || 'piece'
-                  }.`
-                : refutation.type === 'check'
-                  ? `After that, ${refutation.san} gives check with strong pressure.`
-                  : `The opponent has ${refutation.san} and the position turns against you.`;
-          setRetryRefutationText(text);
-          // Board jumps to attempt position for the demo to animate from
-          setDemoPosition(attemptFen);
-          setCoachSubPhase('retry-demo');
-        } else {
-          // No clear refutation — just say "not quite"
-          setRetryRefutationText(null);
-          const remaining = coachAttemptsLeft - 1;
-          setCoachAttemptsLeft(remaining);
-          if (remaining <= 0) setCoachSubPhase('reveal');
-          else setCoachSubPhase('retry-wrong');
-        }
+        retryDemoStartFenRef.current = attemptFen;
+        retryDemoQueueRef.current = [];
+        setRetryRefutationText(null);
+        setDemoPosition(attemptFen);
+        setCoachSubPhase('retry-analyzing');
+        // Ask engine to analyze this position. analyze() will preempt the
+        // current preFen analysis cleanly via useStockfish's queue.
+        sf.analyze(attemptFen);
         return false;
       }
 
@@ -1219,6 +1341,7 @@ export default function PlayView({
     (coachSubPhase === 'pausing' ||
       coachSubPhase === 'demo' ||
       coachSubPhase === 'rewinding' ||
+      coachSubPhase === 'retry-analyzing' ||
       coachSubPhase === 'retry-demo' ||
       coachSubPhase === 'analyzing');
 
@@ -1277,6 +1400,7 @@ export default function PlayView({
                   {coachSubPhase === 'rewinding' && 'Rewinding'}
                   {coachSubPhase === 'analyzing' && 'Analyzing'}
                   {coachSubPhase === 'explain' && 'Coach · your turn'}
+                  {coachSubPhase === 'retry-analyzing' && 'Coach · checking'}
                   {coachSubPhase === 'retry-demo' && 'Testing your idea'}
                   {coachSubPhase === 'retry-wrong' && 'Try again'}
                   {coachSubPhase === 'retry-correct' && 'Nice!'}

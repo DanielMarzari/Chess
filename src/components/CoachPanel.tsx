@@ -11,7 +11,8 @@ export type CoachSubPhase =
   | 'demo' // auto-playing the consequences of the bad move
   | 'rewinding' // brief visual before returning to pre-move position
   | 'explain' // showing what went wrong + prompt to try again
-  | 'retry-demo' // user just tried a wrong move; playing out opponent's refutation of it
+  | 'retry-analyzing' // engine is analyzing the student's retry attempt to find its refutation
+  | 'retry-demo' // user just tried a wrong move; playing out engine's refutation of it
   | 'retry-wrong' // just tried but it wasn't right (after retry-demo completes)
   | 'retry-correct' // just tried and it was a good move
   | 'reveal' // out of tries or gave up — here's the answer
@@ -123,6 +124,17 @@ export default function CoachPanel({
             </div>
             <AttemptsIndicator left={attemptsLeft} max={3} />
           </>
+        )}
+
+        {subPhase === 'retry-analyzing' && (
+          <div className="text-[var(--muted)] text-[13px] flex items-center gap-2">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+            Checking what happens after{' '}
+            <span className="font-mono font-bold text-[var(--foreground-strong)]">
+              {lastAttemptSan}
+            </span>
+            …
+          </div>
         )}
 
         {subPhase === 'retry-demo' && (
