@@ -337,11 +337,17 @@ export default function PlayView({
     coachMoverRef.current = mover;
 
     // Capture the refutation: the engine's best line from the CURRENT
-    // (post-bad-move) position. sf.lines was analyzing that position right
-    // before we got here. Keep more of the PV so the demo effect can play
-    // until the advantage is actually cashed in.
-    const pv = sf.lines[0]?.pv?.trim().split(/\s+/).filter(Boolean) ?? [];
-    coachRefutationRef.current = pv.slice(0, 14);
+    // (post-bad-move) position. Require depth ≥ 14 before trusting the PV —
+    // at shallower depths, the tail of the PV can contain noise moves (the
+    // "hung rook in the middle of the line" problem). Truncate to at most
+    // half the depth (plus one) as a safety net so we never play plies the
+    // engine hasn't verified.
+    const primaryForRefutation = sf.lines[0];
+    const pvDepth = primaryForRefutation?.depth ?? 0;
+    if (!primaryForRefutation || pvDepth < 14) return;
+    const pv = primaryForRefutation.pv.trim().split(/\s+/).filter(Boolean);
+    const trustedPlies = Math.min(12, Math.max(4, Math.floor(pvDepth / 2) + 1));
+    coachRefutationRef.current = pv.slice(0, trustedPlies);
     // Clear demo log + contest state for the new lesson
     demoMoveLogRef.current = [];
     setDemoMoveLog([]);
@@ -539,7 +545,7 @@ export default function PlayView({
     if (sf.lines.length === 0) return;
 
     const primary = sf.lines[0];
-    if (primary.depth < 12) return;
+    if (primary.depth < 14) return; // need reliable depth for the demo's tail moves
 
     const attemptFen = retryDemoStartFenRef.current;
     if (!attemptFen) {
@@ -549,6 +555,9 @@ export default function PlayView({
 
     const pvTokens = primary.pv.trim().split(/\s+/).filter(Boolean);
     if (pvTokens.length === 0) return;
+    // Depth-scaled truncation: never show moves beyond the engine's reliable
+    // lookahead. At depth 14 we trust ~8 plies, at depth 20 we trust ~11.
+    const retryTrusted = Math.min(12, Math.max(4, Math.floor(primary.depth / 2) + 1));
 
     // Staleness guard: PV's first move must be legal at attemptFen.
     try {
@@ -637,9 +646,9 @@ export default function PlayView({
       return;
     }
 
-    // Real refutation incoming — capture the PV (up to 14 half-moves) and
-    // let the demo effect play it out.
-    retryDemoQueueRef.current = pvTokens.slice(0, 14);
+    // Real refutation incoming — capture the PV, truncated to the depth-
+    // scaled trusted length, and let the demo effect play it out.
+    retryDemoQueueRef.current = pvTokens.slice(0, retryTrusted);
     setCoachSubPhase('retry-demo');
   }, [coachActive, coachSubPhase, sf.lines, coachAttemptsLeft, settings]);
 
@@ -1674,8 +1683,10 @@ export default function PlayView({
       return;
     }
 
-    // Save the PV for the playout effect
-    coachRefutationRef.current = pvTokens.slice(0, 6);
+    // Save the PV for the playout effect — depth-scaled truncation so we
+    // never play moves beyond what the engine has verified.
+    const contestTrusted = Math.min(6, Math.max(3, Math.floor(primary.depth / 2)));
+    coachRefutationRef.current = pvTokens.slice(0, contestTrusted);
     setCoachSubPhase('contest-playout');
   }, [coachActive, coachSubPhase, sf.lines]);
 
