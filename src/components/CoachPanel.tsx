@@ -57,7 +57,9 @@ interface CoachPanelProps {
   onShowSolution: () => void; // give up, show best, apply it
   onContinue: () => void; // proceed after reveal / correct answer
   onContestMove: (demoMoveIdx: number) => void; // jump into the demo line at this point
-  onContestExit: () => void; // back to the lesson from contest mode
+  onContestExit: () => void; // back to the lesson from contest mode (after result)
+  onContestCancel: () => void; // bail out of 'contesting' before playing (no cycle spent)
+  onHoverDemoMove: (idx: number | null) => void; // preview the position on the board
 }
 
 export default function CoachPanel({
@@ -78,6 +80,8 @@ export default function CoachPanel({
   onContinue,
   onContestMove,
   onContestExit,
+  onContestCancel,
+  onHoverDemoMove,
 }: CoachPanelProps) {
   const inContestFlow =
     subPhase === 'contesting' ||
@@ -382,18 +386,24 @@ export default function CoachPanel({
               </span>
             )}
           </div>
-          <div className="flex flex-wrap gap-1 text-xs font-mono">
+          <div
+            className="flex flex-wrap gap-1 text-xs font-mono"
+            onMouseLeave={() => onHoverDemoMove(null)}
+          >
             {demoMoveLog.map((m, i) => (
               <button
                 key={i}
                 onClick={() => onContestMove(i)}
+                onMouseEnter={() => onHoverDemoMove(i)}
+                onFocus={() => onHoverDemoMove(i)}
+                onBlur={() => onHoverDemoMove(null)}
                 disabled={contestCycle >= 3}
                 className={`px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   m.mover === 'w'
                     ? 'bg-[var(--surface-2)] border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
                     : 'bg-[var(--background)]/40 border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
                 }`}
-                title={`Click to play a different move at this point`}
+                title={`Hover to preview, click to contest`}
               >
                 {m.mover === 'w' ? `${Math.floor(m.ply / 2) + 1}.` : ''}
                 {m.san}
@@ -436,6 +446,19 @@ export default function CoachPanel({
             className="w-full py-1.5 rounded text-xs flex items-center justify-center gap-1.5 bg-[var(--surface-2)] hover:bg-[var(--border)] text-[var(--foreground)] transition-colors"
           >
             <Undo2 size={12} /> Back to the lesson
+          </button>
+        </div>
+      )}
+
+      {/* Contesting-in-progress: Cancel so clicking the wrong demo move
+          isn't punitive (no cycle spent, restores prior state). */}
+      {subPhase === 'contesting' && (
+        <div className="border-t border-[var(--border)] p-2">
+          <button
+            onClick={onContestCancel}
+            className="w-full py-1.5 rounded text-xs flex items-center justify-center gap-1.5 bg-[var(--surface-2)] hover:bg-[var(--border)] text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+          >
+            <Undo2 size={12} /> Cancel — I picked the wrong move
           </button>
         </div>
       )}

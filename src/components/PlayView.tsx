@@ -219,6 +219,10 @@ export default function PlayView({
   const contestPostUserFenRef = useRef<string | null>(null); // FEN after user's contest move
   // Stash the previous coach sub-phase so we can return to it on contest exit
   const contestReturnSubPhaseRef = useRef<CoachSubPhase>('retry-wrong');
+  // Hover preview: when the user hovers a demo move in the coach panel, we
+  // override the board to show that position (with the demo move as a
+  // neutral-colored arrow) so they can pick the right one before clicking.
+  const [demoHoverIdx, setDemoHoverIdx] = useState<number | null>(null);
 
   const sf = useStockfish();
   const sound = useSound();
@@ -1492,6 +1496,7 @@ export default function PlayView({
     contestStartFenRef.current = null;
     contestUserUciRef.current = null;
     contestPostUserFenRef.current = null;
+    setDemoHoverIdx(null);
     // Resume the clock so the CPU's turn can run out normally
     clockRef.current.resume();
   }, []);
@@ -1553,6 +1558,7 @@ export default function PlayView({
       setContestResultText(null);
       setDemoPosition(target.fenBefore);
       setDemoArrow(null);
+      setDemoHoverIdx(null); // clear any hover preview — we're committing to this branch
       setCoachSubPhase('contesting');
     },
     [contestCycle, demoMoveLog, coachSubPhase]
@@ -1567,6 +1573,23 @@ export default function PlayView({
     setCoachSubPhase(contestReturnSubPhaseRef.current);
     setContestCycle((c) => Math.min(3, c + 1));
   }, []);
+
+  // Cancel a contest before the user has played anything — no cycle spent.
+  // Used when they click the wrong demo move and want to back out.
+  const onContestCancel = useCallback(() => {
+    contestStartFenRef.current = null;
+    contestUserUciRef.current = null;
+    contestPostUserFenRef.current = null;
+    setContestStartIdx(null);
+    setContestUserSan(null);
+    setContestEngineSan(null);
+    setContestResultText(null);
+    setDemoPosition(null);
+    setDemoArrow(null);
+    // Stop whatever contest analysis might be mid-flight
+    sf.cancelMove();
+    setCoachSubPhase(contestReturnSubPhaseRef.current);
+  }, [sf]);
 
   // ----- Contest analysis effect (engine analyzing user's contest attempt)
   // When in 'contest-analyzing', wait for the engine's full-strength PV from
@@ -1797,7 +1820,24 @@ export default function PlayView({
     !coachActive &&
     !!computerPlays;
 
-  // Arrow priority during coaching: demo > reveal > hover
+  // Demo-move hover preview: override position + arrow to show the
+  // hovered move's "before" FEN and the move itself in neutral color.
+  const previewFromHover = (() => {
+    if (demoHoverIdx === null) return null;
+    const m = demoMoveLog[demoHoverIdx];
+    if (!m) return null;
+    return {
+      fen: m.fenBefore,
+      arrow: {
+        from: m.uci.slice(0, 2) as Square,
+        to: m.uci.slice(2, 4) as Square,
+        color: '#94a3b8', // slate-400 — neutral preview
+      },
+    };
+  })();
+
+  // Arrow priority during coaching:
+  //   active demo playback > contest-reveal (green) > demo-move hover preview > PV-line hover
   const coachArrow: { from: Square; to: Square; color?: string } | null = demoArrow
     ? demoArrow
     : coachActive && coachSubPhase === 'reveal' && coachBestMoveUciRef.current
@@ -1806,10 +1846,10 @@ export default function PlayView({
           to: coachBestMoveUciRef.current.slice(2, 4) as Square,
           color: '#759900',
         }
-      : hoverArrow;
+      : previewFromHover?.arrow ?? hoverArrow;
 
-  // When demo is running, the board shows a different position from game state.
-  const boardPosition = demoPosition ?? currentFen;
+  // Board position priority: active demo override > hover preview > game state.
+  const boardPosition = demoPosition ?? previewFromHover?.fen ?? currentFen;
   const isCoachBusy =
     coachActive &&
     (coachSubPhase === 'pausing' ||
@@ -2006,6 +2046,8 @@ export default function PlayView({
                   onContinue={coachContinue}
                   onContestMove={onContestMove}
                   onContestExit={onContestExit}
+                  onContestCancel={onContestCancel}
+                  onHoverDemoMove={setDemoHoverIdx}
                 />
               )}
               <GameStatusPanel
