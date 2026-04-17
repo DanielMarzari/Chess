@@ -153,6 +153,13 @@ export default function PlayView({
   const [annotations, setAnnotations] = useState<Record<number, string>>({});
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
   const gameResultShownRef = useRef<string | null>(null);
+
+  // Auto-save bookkeeping. Coach games (Mentor) and Explore games are saved
+  // automatically once the user has actually played at least one move so they
+  // show up in /review stats. Loaded PGNs are NOT auto-saved unless the user
+  // adds moves to them.
+  const gameHasUserMovesRef = useRef(false);
+  const autoSavedKeyRef = useRef<string | null>(null);
   const [hoverArrow, setHoverArrow] = useState<{ from: Square; to: Square } | null>(null);
   const [annotating, setAnnotating] = useState<{ index: number; x: number; y: number } | null>(null);
 
@@ -1027,6 +1034,8 @@ export default function PlayView({
       });
       setGame(g);
       setCurrentMoveIndex((i) => i + 1);
+      // Mark the game as having actual user/CPU activity for auto-save eligibility
+      gameHasUserMovesRef.current = true;
       return true;
     },
     []
@@ -1193,6 +1202,62 @@ export default function PlayView({
     setGamePhase('ended');
   }, [gamePhase, game, gameResult, moveHistory.length, clock]);
 
+  // PGN metadata helper — needs to be defined before autoSaveCurrentGame
+  // and backToSetup since both depend on it.
+  const getPgnMeta = useCallback(() => {
+    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
+    const white = vsCpu && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
+    const black = vsCpu && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
+    return {
+      event: committedMode === 'coach' ? 'Training Game' : vsCpu ? 'vs Computer' : 'Casual Game',
+      site: 'chess.danmarzari.com',
+      date: todayTag(),
+      white,
+      black,
+      eco: opening?.eco,
+      opening: opening?.name,
+    };
+  }, [committedMode, computerPlays, sf.elo, opening]);
+
+  // Auto-save: any Mentor or Explore game with at least one user/CPU move
+  // gets persisted to /api/games once. Two trigger points:
+  //   - The game ends naturally (gameResult set) — useEffect below
+  //   - The user quits mid-game via backToSetup — handled inside that callback
+  const autoSaveCurrentGame = useCallback(
+    (note?: string) => {
+      if (!gameHasUserMovesRef.current) return;
+      if (moveHistory.length === 0) return;
+      // Build a deterministic dedup key per finished game state
+      const key = `${moveHistory.join(',')}|${gameResult?.type ?? 'ongoing'}`;
+      if (autoSavedKeyRef.current === key) return;
+      autoSavedKeyRef.current = key;
+      const meta = getPgnMeta();
+      const pgn = buildPgn(moveHistory, meta);
+      void fetch('/api/games', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pgn,
+          title: `${meta.white} vs ${meta.black} — ${meta.date}${note ? ' (' + note + ')' : ''}`,
+          white: meta.white,
+          black: meta.black,
+        }),
+      })
+        .then((r) => {
+          if (r.ok) showToast('Saved to Review');
+        })
+        .catch(() => {
+          // silent — user can still manually save
+        });
+    },
+    [moveHistory, gameResult, getPgnMeta, showToast]
+  );
+
+  useEffect(() => {
+    if (!gameResult) return;
+    autoSaveCurrentGame();
+  }, [gameResult, autoSaveCurrentGame]);
+
   // Adaptive rating update — fires once whenever a Mentor (adaptive) game
   // ends. Translates the result into 1/0.5/0 from the human's perspective
   // and applies a standard ELO update against the opponent we just played.
@@ -1263,6 +1328,9 @@ export default function PlayView({
     setAnnotations({});
     setGameResult(null);
     gameResultShownRef.current = null;
+    // Reset auto-save tracking for the new game
+    gameHasUserMovesRef.current = false;
+    autoSavedKeyRef.current = null;
 
     setCommittedMode(draftMode);
     setGamePhase('playing');
@@ -1270,6 +1338,11 @@ export default function PlayView({
 
   // Return to setup (quit current game or after game end)
   const backToSetup = useCallback(() => {
+    // Auto-save in-progress game on quit (game-end path is handled by the
+    // gameResult effect, so this catches the "abandoned mid-game" case).
+    if (gameHasUserMovesRef.current && !gameResult) {
+      autoSaveCurrentGame('aborted');
+    }
     sf.cancelMove();
     boardRef.current?.clearPremoves();
     clock.stop();
@@ -1277,7 +1350,7 @@ export default function PlayView({
     setGameResult(null);
     gameResultShownRef.current = null;
     setGamePhase('setup');
-  }, [sf, clock]);
+  }, [sf, clock, gameResult, autoSaveCurrentGame]);
 
   const undoMove = useCallback(() => {
     if (moveHistory.length === 0) return;
@@ -1330,6 +1403,9 @@ export default function PlayView({
       setNags(Array(all.length - 1).fill(null));
       setGameResult(null);
       gameResultShownRef.current = null;
+      // Imported game: don't auto-save unless the user adds moves to it.
+      gameHasUserMovesRef.current = false;
+      autoSavedKeyRef.current = null;
       // Imported game: skip setup and land straight in playing phase
       setGamePhase('playing');
     },
@@ -1343,21 +1419,6 @@ export default function PlayView({
       importPgn(pgn);
     }
   }, [importPgn]);
-
-  const getPgnMeta = useCallback(() => {
-    const vsCpu = committedMode === 'cpu' || committedMode === 'coach';
-    const white = vsCpu && computerPlays === 'w' ? `CPU (${sf.elo})` : 'Human';
-    const black = vsCpu && computerPlays === 'b' ? `CPU (${sf.elo})` : 'Human';
-    return {
-      event: committedMode === 'coach' ? 'Training Game' : vsCpu ? 'vs Computer' : 'Casual Game',
-      site: 'chess.danmarzari.com',
-      date: todayTag(),
-      white,
-      black,
-      eco: opening?.eco,
-      opening: opening?.name,
-    };
-  }, [committedMode, computerPlays, sf.elo, opening]);
 
   const exportPgn = useCallback(() => {
     const pgn = buildPgn(moveHistory, getPgnMeta());
