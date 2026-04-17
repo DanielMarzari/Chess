@@ -1442,6 +1442,28 @@ export default function PlayView({
     boardRef.current?.clearPremoves();
     clock.stop();
     clock.disable();
+    // Wipe board state so the setup screen (and the game that follows from
+    // it) doesn't inherit the last game's moves, position, or evals. Without
+    // this, hitting New Game mid-game leaves the previous PGN live behind
+    // the dimmed setup panel until Start fires.
+    const fresh = new Chess();
+    setGame(fresh);
+    setMoveHistory([]);
+    setPositions([fresh.fen()]);
+    setCurrentMoveIndex(-1);
+    setMoveEvals([]);
+    setNags([]);
+    setAnnotations({});
+    gameHasUserMovesRef.current = false;
+    autoSavedKeyRef.current = null;
+    coachingMomentsCountRef.current = 0;
+    gameStartRatingRef.current = null;
+    coachedIndicesRef.current = new Set();
+    setCoachActive(false);
+    setCoachSubPhase('analyzing');
+    setCoachExplanation(null);
+    setDemoPosition(null);
+    setDemoArrow(null);
     setGameResult(null);
     gameResultShownRef.current = null;
     clearPersistedGame();
