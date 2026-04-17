@@ -242,6 +242,17 @@ export function explainMove(input: ExplainInput): CoachExplanation {
 
   const oppCapture = firstCapture(postBadFen, responsePvUci);
 
+  // Was the user's own move a capture? (For trade-recap detection below.)
+  const preGame = new Chess(preMoveFen);
+  const userToSquare = input.badMoveUci.slice(2, 4);
+  const userMovedTarget = preGame.get(userToSquare as Square);
+  const userMoveWasCapture = !!userMovedTarget;
+  const isTradeRecap =
+    userMoveWasCapture &&
+    !!oppCapture &&
+    oppCapture.toSquare === userToSquare &&
+    oppCapture.ply === 1; // immediate recapture
+
   // Is the opponent's response a mating sequence?
   const responseSan = uciPvToSan(postBadFen, responsePvUci, 6);
   const deliversMate = mateDistanceFromPv(responseSan);
@@ -251,6 +262,11 @@ export function explainMove(input: ExplainInput): CoachExplanation {
     whyBad = `After ${badMoveSan}, ${oppName} can force mate in ${deliversMate}.`;
   } else if (missedMate !== null) {
     whyBad = `${badMoveSan} missed a forced mate in ${missedMate}. You had the win on the board.`;
+  } else if (isTradeRecap && userMovedTarget) {
+    // User initiated a trade — opponent's "capture" is just the recapture
+    // completing the exchange, not winning material. Frame it accordingly.
+    const userPieceName = pieceName(userMovedTarget.type); // what the user CAPTURED
+    whyBad = `${badMoveSan} initiates a trade for the ${userPieceName} on ${userToSquare}, but the resulting position favors ${oppName} by about ${dropPawns} pawns of evaluation — the engine prefers ${bestMoveSan} here.`;
   } else if (oppCapture && oppCapture.ply <= 2) {
     const capturedValue = PIECE_VALUES[oppCapture.capturedType];
     if (capturedValue >= 3) {

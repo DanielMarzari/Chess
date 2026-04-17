@@ -343,11 +343,17 @@ export default function PlayView({
     // Positional-only filter: if the engine's line doesn't end in net material
     // loss for the student, and the user has opted out of positional coaching,
     // skip the trigger entirely. Mark the move so we don't re-examine it.
-    const postBadFenForCheck = positions[lastIdx + 1] || positions[0];
+    //
+    // Important: measure material change from the PRE-bad-move position with
+    // the user's move included as the first ply. Otherwise an even trade like
+    // Bxg6 / fxg6 looks like "you lost a bishop" because we'd start from the
+    // post-Bxg6 position (where you had a freebie bishop) — but you also
+    // captured one in your move, so the net is zero.
+    const fullLine = badUci ? [badUci, ...pv] : pv;
     if (
       !settings.coachOnPositional &&
-      pv.length > 0 &&
-      !lineEndsInMaterialLoss(postBadFenForCheck, pv, mover)
+      fullLine.length > 0 &&
+      !lineEndsInMaterialLoss(preFen, fullLine, mover)
     ) {
       // Already added to coachedIndicesRef above — won't trigger again.
       return;
