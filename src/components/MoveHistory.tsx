@@ -121,15 +121,16 @@ export default function MoveHistory({
     const evalText = evalEntry
       ? formatEvalPawns(evalEntry.score ?? null, evalEntry.mate)
       : null;
-    // Color the eval by who's winning: positive = white advantage (green),
-    // negative = black advantage (red tint on white's side, or the reverse).
-    // Use a muted palette so the primary NAG color still dominates.
+    // Eval is shown in white's perspective (chess convention — positive =
+    // white winning, negative = black winning). Don't color-code by sign
+    // alone — that reads as "higher = good universally", which is wrong
+    // when the mover is black. Instead: brighten when a side has a clear
+    // advantage (either sign), mute when it's close to equal.
+    const cp = evalEntry?.score ?? 0;
     const evalColor = evalEntry
-      ? (evalEntry.score ?? 0) > 30
-        ? 'var(--success)'
-        : (evalEntry.score ?? 0) < -30
-          ? 'var(--danger)'
-          : 'var(--muted)'
+      ? Math.abs(cp) > 30
+        ? 'var(--foreground-strong)'
+        : 'var(--muted)'
       : 'var(--muted)';
 
     return (

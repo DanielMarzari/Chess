@@ -2457,6 +2457,21 @@ export default function PlayView({
                   evals={moveEvals}
                   positions={positions}
                   currentMoveIndex={currentMoveIndex}
+                  onMoveClick={goToMove}
+                  // Switch to "Game review" framing once the game has
+                  // ended — that's when step-through review makes sense.
+                  reviewMode={gamePhase === 'ended'}
+                  // When the user played a side, bias teaching-moment
+                  // jumps toward THEIR moves.
+                  reviewColor={
+                    committedMode === 'coach' || committedMode === 'cpu'
+                      ? computerPlays === 'w'
+                        ? 'b'
+                        : computerPlays === 'b'
+                          ? 'w'
+                          : null
+                      : null
+                  }
                 />
               )}
               <GameControls
@@ -2507,7 +2522,34 @@ export default function PlayView({
           setGameResult(null);
           backToSetup();
         }}
-        onAnalyze={() => setGameResult(null)}
+        onAnalyze={() => {
+          // Close the modal and jump to the first teaching moment of the
+          // user's color so they land straight in "game review" mode with
+          // a concrete move to study. If there's no negative NAG on their
+          // side, fall back to the very first move.
+          setGameResult(null);
+          const userColor: 'w' | 'b' | null =
+            committedMode === 'coach' || committedMode === 'cpu'
+              ? computerPlays === 'w'
+                ? 'b'
+                : computerPlays === 'b'
+                  ? 'w'
+                  : null
+              : null;
+          const NEGATIVE: NagType[] = ['blunder', 'mistake', 'miss', 'inaccuracy'];
+          let targetIdx = 0;
+          for (let i = 0; i < nags.length; i++) {
+            const n = nags[i];
+            if (!n || !NEGATIVE.includes(n)) continue;
+            if (userColor) {
+              const m: 'w' | 'b' = i % 2 === 0 ? 'w' : 'b';
+              if (m !== userColor) continue;
+            }
+            targetIdx = i;
+            break;
+          }
+          goToMove(targetIdx);
+        }}
       />
 
       {annotating && (

@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Chess } from 'chess.js';
-import { ChevronRight, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Sparkles, Star } from 'lucide-react';
 import type { NagType, PlyEval } from '@/lib/accuracy';
 import { NAG_META } from '@/lib/accuracy';
 import { describeMove, formatEvalPawns } from '@/lib/describeMove';
@@ -13,13 +13,24 @@ interface MoveInsightProps {
   evals: (PlyEval | null)[];
   positions: string[]; // FENs; positions[i] is BEFORE move i
   currentMoveIndex: number;
+  onMoveClick: (index: number) => void;
+  // When true (typically once the game has ended), the panel re-labels
+  // itself as "Game Review" and surfaces jump-to-next-issue buttons so the
+  // user can step through teaching moments the way chess.com does.
+  reviewMode?: boolean;
+  // If the user picked a side (mentor / PGN import with perspective),
+  // reviewColor lets us prioritize THEIR mistakes when stepping issue→issue.
+  reviewColor?: 'w' | 'b' | null;
 }
+
+const NEGATIVE_NAGS: NagType[] = ['blunder', 'mistake', 'miss', 'inaccuracy'];
 
 /**
  * Chess.com-style per-move review panel. Shows the selected move's
- * classification, eval, natural-language description, and an optional
- * "show follow-up" reveal with the engine's preferred continuation from
- * the position BEFORE the user's move.
+ * classification, eval, natural-language description, and — in review
+ * mode — prev/next controls, plus an optional "show best" reveal with
+ * the engine's preferred continuation from the position BEFORE the
+ * user's move.
  */
 export default function MoveInsight({
   moves,
@@ -27,12 +38,17 @@ export default function MoveInsight({
   evals,
   positions,
   currentMoveIndex,
+  onMoveClick,
+  reviewMode = false,
+  reviewColor = null,
 }: MoveInsightProps) {
-  const [showFollowUp, setShowFollowUp] = useState(false);
+  const [showBest, setShowBest] = useState(false);
 
-  // The description + follow-up are keyed on currentMoveIndex, so when the
-  // user clicks a different move we collapse the follow-up.
-  useMemo(() => setShowFollowUp(false), [currentMoveIndex]);
+  // Reset the "show best" reveal whenever the selected move changes so we
+  // don't carry a reveal over to a move where it doesn't make sense.
+  useEffect(() => {
+    setShowBest(false);
+  }, [currentMoveIndex]);
 
   const idx = currentMoveIndex;
   if (idx < 0 || idx >= moves.length) return null;
@@ -75,13 +91,10 @@ export default function MoveInsight({
     cpAfterFromMover: cpFromMover,
   });
 
-  const evalText = currEval
-    ? formatEvalPawns(currEval.score ?? null, currEval.mate)
-    : null;
+  const evalText = currEval ? formatEvalPawns(currEval.score ?? null, currEval.mate) : null;
 
-  // "Show follow-up" resolves the engine's preferred move at the pre-move
-  // position (bestUci) into a SAN so we can display it naturally.
-  let followUpSan: string | null = null;
+  // Resolve the engine's preferred move at the pre-move position into SAN.
+  let bestSan: string | null = null;
   if (bestUci && bestUci !== moveUci) {
     try {
       const g = new Chess(preFen);
@@ -90,20 +103,62 @@ export default function MoveInsight({
         to: bestUci.slice(2, 4),
         promotion: bestUci.slice(4, 5) || 'q',
       });
-      if (m) followUpSan = m.san;
+      if (m) bestSan = m.san;
     } catch {
-      // ignore — we'll just not show the follow-up
+      // ignore
     }
   }
 
   const moveNumber = Math.floor(idx / 2) + 1;
   const moveLabel = mover === 'w' ? `${moveNumber}.` : `${moveNumber}…`;
 
+  // Jump helpers for review mode. "Issue" = blunder/mistake/miss/inaccuracy,
+  // biased toward the user's color when we know it.
+  const findNextIssue = (dir: 1 | -1): number | null => {
+    for (let i = idx + dir; i >= 0 && i < nags.length; i += dir) {
+      const n = nags[i];
+      if (!n || !NEGATIVE_NAGS.includes(n)) continue;
+      if (reviewColor) {
+        const m: 'w' | 'b' = i % 2 === 0 ? 'w' : 'b';
+        if (m !== reviewColor) continue;
+      }
+      return i;
+    }
+    return null;
+  };
+
+  const hasAlternative = !!bestSan;
+  const isIssue = nag !== null && NEGATIVE_NAGS.includes(nag);
+
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2">
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
-        <Sparkles size={12} className="text-[var(--accent)]" />
-        <span>Move insight</span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
+          <Sparkles size={12} className="text-[var(--accent)]" />
+          <span>{reviewMode ? 'Game review' : 'Move insight'}</span>
+        </div>
+        {reviewMode && (
+          <div className="flex items-center gap-1 text-[10px] text-[var(--muted)]">
+            <NavButton
+              title="Previous teaching moment"
+              onClick={() => {
+                const i = findNextIssue(-1);
+                if (i !== null) onMoveClick(i);
+              }}
+            >
+              <ChevronLeft size={12} />
+            </NavButton>
+            <NavButton
+              title="Next teaching moment"
+              onClick={() => {
+                const i = findNextIssue(1);
+                if (i !== null) onMoveClick(i);
+              }}
+            >
+              <ChevronRight size={12} />
+            </NavButton>
+          </div>
+        )}
       </div>
 
       <div className="flex items-baseline gap-2 flex-wrap">
@@ -115,7 +170,9 @@ export default function MoveInsight({
             style={{ color: meta.color, background: meta.bg }}
           >
             <span className="font-mono">{meta.symbol}</span>
-            <span>is {articleFor(meta.label)} {meta.label.toLowerCase()}</span>
+            <span>
+              is {articleFor(meta.label)} {meta.label.toLowerCase()}
+            </span>
           </span>
         )}
         {evalText && (
@@ -123,12 +180,17 @@ export default function MoveInsight({
             className="ml-auto font-mono text-xs tabular-nums"
             style={{
               color:
-                (currEval?.score ?? 0) > 30
-                  ? 'var(--success)'
-                  : (currEval?.score ?? 0) < -30
-                    ? 'var(--danger)'
-                    : 'var(--muted)',
+                Math.abs(currEval?.score ?? 0) > 30
+                  ? 'var(--foreground-strong)'
+                  : 'var(--muted)',
             }}
+            title={
+              (currEval?.score ?? 0) > 0
+                ? 'White advantage'
+                : (currEval?.score ?? 0) < 0
+                  ? 'Black advantage'
+                  : 'Roughly equal'
+            }
           >
             {evalText}
           </span>
@@ -137,29 +199,63 @@ export default function MoveInsight({
 
       <p className="text-[13px] leading-relaxed text-[var(--foreground)]">{description}</p>
 
-      {followUpSan && (nag === 'miss' || nag === 'blunder' || nag === 'mistake' || nag === 'inaccuracy') && (
-        <button
-          onClick={() => setShowFollowUp((s) => !s)}
-          className="flex items-center gap-1 text-xs text-[var(--accent)] hover:underline"
-        >
-          <ChevronRight
-            size={12}
-            className={`transition-transform ${showFollowUp ? 'rotate-90' : ''}`}
-          />
-          {showFollowUp ? 'Hide' : 'Show'} follow-up
-        </button>
-      )}
+      {/* Best / Next controls mirror chess.com's review buttons. "Best" is
+          only meaningful when there IS an alternative worth showing (the
+          move wasn't already best/great/brilliant). */}
+      <div className="flex items-center gap-1.5 pt-1">
+        {hasAlternative && isIssue && (
+          <button
+            onClick={() => setShowBest((s) => !s)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--surface-2)] transition-colors"
+            title="Reveal the engine's preferred move"
+          >
+            <Star size={12} className="text-[var(--accent)]" />
+            {showBest ? 'Hide best' : 'Show best'}
+          </button>
+        )}
+        {reviewMode && (
+          <button
+            onClick={() => {
+              const nextIdx = Math.min(moves.length - 1, idx + 1);
+              onMoveClick(nextIdx);
+            }}
+            disabled={idx >= moves.length - 1}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 ml-auto"
+          >
+            Next
+            <ChevronRight size={12} />
+          </button>
+        )}
+      </div>
 
-      {showFollowUp && followUpSan && (
-        <div className="text-xs text-[var(--muted)] pl-4 border-l-2 border-[var(--accent)]/40">
+      {showBest && bestSan && (
+        <div className="text-xs text-[var(--muted)] pl-3 border-l-2 border-[var(--accent)]/60">
           Engine preferred{' '}
-          <span className="font-mono font-bold text-[var(--foreground-strong)]">
-            {followUpSan}
-          </span>{' '}
-          in this position.
+          <span className="font-mono font-bold text-[var(--foreground-strong)]">{bestSan}</span> in
+          this position.
         </div>
       )}
     </div>
+  );
+}
+
+function NavButton({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground)]"
+    >
+      {children}
+    </button>
   );
 }
 
