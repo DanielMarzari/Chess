@@ -11,7 +11,7 @@ import CpLossGraph from '@/components/CpLossGraph';
 import SetupPanel, { type GameMode } from '@/components/SetupPanel';
 import GameStatusPanel from '@/components/GameStatusPanel';
 import LiveStats from '@/components/LiveStats';
-import CoachPanel, { type CoachSubPhase } from '@/components/CoachPanel';
+import CoachPanel, { type CoachSubPhase, type DemoMove } from '@/components/CoachPanel';
 import PgnImport from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
@@ -195,6 +195,24 @@ export default function PlayView({
   const retryAttemptUciRef = useRef<string | null>(null);
   const [retryRefutationText, setRetryRefutationText] = useState<string | null>(null);
 
+  // Demo move recording — both the main demo and the retry-demo populate
+  // this as they play out, so the user can later branch into the line.
+  const demoMoveLogRef = useRef<DemoMove[]>([]);
+  const [demoMoveLog, setDemoMoveLog] = useState<DemoMove[]>([]);
+
+  // Contest state — when the user clicks a move in the demo history to try
+  // an alternative. The engine plays its response at FULL strength.
+  const [contestCycle, setContestCycle] = useState(0); // 0..2; capped by UI at 3
+  const [contestStartIdx, setContestStartIdx] = useState<number | null>(null);
+  const [contestUserSan, setContestUserSan] = useState<string | null>(null);
+  const [contestEngineSan, setContestEngineSan] = useState<string | null>(null);
+  const [contestResultText, setContestResultText] = useState<string | null>(null);
+  const contestStartFenRef = useRef<string | null>(null); // FEN before user's contest move
+  const contestUserUciRef = useRef<string | null>(null); // user's contest move
+  const contestPostUserFenRef = useRef<string | null>(null); // FEN after user's contest move
+  // Stash the previous coach sub-phase so we can return to it on contest exit
+  const contestReturnSubPhaseRef = useRef<CoachSubPhase>('retry-wrong');
+
   const sf = useStockfish();
   const sound = useSound();
   const settings = useSettings();
@@ -302,6 +320,14 @@ export default function PlayView({
     // until the advantage is actually cashed in.
     const pv = sf.lines[0]?.pv?.trim().split(/\s+/).filter(Boolean) ?? [];
     coachRefutationRef.current = pv.slice(0, 14);
+    // Clear demo log + contest state for the new lesson
+    demoMoveLogRef.current = [];
+    setDemoMoveLog([]);
+    setContestCycle(0);
+    setContestStartIdx(null);
+    setContestUserSan(null);
+    setContestEngineSan(null);
+    setContestResultText(null);
 
     // Positional-only filter: if the engine's line doesn't end in net material
     // loss for the student, and the user has opted out of positional coaching,
@@ -387,6 +413,7 @@ export default function PlayView({
         setTimeout(() => {
           if (cancelled) return;
           setDemoArrow(null);
+          setDemoMoveLog([...demoMoveLogRef.current]);
           setCoachSubPhase('rewinding');
         }, 1400);
         return;
@@ -414,9 +441,21 @@ export default function PlayView({
           if (isCapture) soundRef.current.play('capture');
           else if (g.inCheck()) soundRef.current.play('check');
           else soundRef.current.play('move');
+          const fenBefore = currentPos;
           currentPos = g.fen();
           setDemoPosition(currentPos);
           setDemoArrow(null);
+          // Record into the demo log so the user can later contest this move
+          if (m) {
+            demoMoveLogRef.current.push({
+              uci,
+              san: m.san,
+              fenBefore,
+              fenAfter: currentPos,
+              mover: m.color,
+              ply: idx,
+            });
+          }
           idx++;
           if (isCapture) nonCaptureStreak = 0;
           else nonCaptureStreak++;
@@ -438,6 +477,8 @@ export default function PlayView({
             setTimeout(() => {
               if (cancelled) return;
               setDemoArrow(null);
+              // Publish the demo log so the user can branch in
+              setDemoMoveLog([...demoMoveLogRef.current]);
               setCoachSubPhase('rewinding');
             }, 1300);
             return;
@@ -615,6 +656,8 @@ export default function PlayView({
         text = `Engine plays out that line and your position holds up — but it's not the strongest reply available.`;
       }
       setRetryRefutationText(text);
+      // Publish the demo log so the user can branch in
+      setDemoMoveLog([...demoMoveLogRef.current]);
 
       const remaining = coachAttemptsLeft - 1;
       setCoachAttemptsLeft(remaining);
@@ -655,9 +698,20 @@ export default function PlayView({
           if (isCapture) soundRef.current.play('capture');
           else if (g.inCheck()) soundRef.current.play('check');
           else soundRef.current.play('move');
+          const fenBefore = pos;
           pos = g.fen();
           setDemoPosition(pos);
           setDemoArrow(null);
+          if (m) {
+            demoMoveLogRef.current.push({
+              uci,
+              san: m.san,
+              fenBefore,
+              fenAfter: pos,
+              mover: m.color,
+              ply: idx,
+            });
+          }
           idx++;
           if (isCapture) nonCaptureStreak = 0;
           else nonCaptureStreak++;
@@ -1023,8 +1077,38 @@ export default function PlayView({
           coachSubPhase === 'rewinding' ||
           coachSubPhase === 'analyzing' ||
           coachSubPhase === 'retry-analyzing' ||
-          coachSubPhase === 'retry-demo')
+          coachSubPhase === 'retry-demo' ||
+          coachSubPhase === 'contest-analyzing' ||
+          coachSubPhase === 'contest-playout' ||
+          coachSubPhase === 'contest-result')
       ) {
+        return false;
+      }
+
+      // Contest mode: user is dropping their alternative move at a branched position
+      if (coachActive && coachSubPhase === 'contesting') {
+        const startFen = contestStartFenRef.current;
+        if (!startFen) return false;
+        const tryGame = new Chess(startFen);
+        let tried;
+        try {
+          tried = tryGame.move({ from: source, to: target, promotion: 'q' });
+        } catch {
+          return false;
+        }
+        if (!tried) return false;
+        const triedUci = `${tried.from}${tried.to}${tried.promotion || ''}`;
+        contestUserUciRef.current = triedUci;
+        const postUserFen = tryGame.fen();
+        contestPostUserFenRef.current = postUserFen;
+        soundRef.current.play('move');
+        setContestUserSan(tried.san);
+        setDemoPosition(postUserFen);
+        setDemoArrow(null);
+        // Engine analyzes at full strength — this preempts whatever sf was
+        // doing. analyze() doesn't apply ELO limits.
+        sf.analyze(postUserFen);
+        setCoachSubPhase('contest-analyzing');
         return false;
       }
 
@@ -1068,6 +1152,14 @@ export default function PlayView({
         retryDemoQueueRef.current = [];
         retryAttemptUciRef.current = triedUci;
         setRetryRefutationText(null);
+        // Clear demo log + contest state — this retry will produce its own line
+        demoMoveLogRef.current = [];
+        setDemoMoveLog([]);
+        setContestCycle(0);
+        setContestStartIdx(null);
+        setContestUserSan(null);
+        setContestEngineSan(null);
+        setContestResultText(null);
         setDemoPosition(attemptFen);
         setCoachSubPhase('retry-analyzing');
         // Ask engine to analyze this position. analyze() will preempt the
@@ -1328,6 +1420,17 @@ export default function PlayView({
     retryDemoQueueRef.current = [];
     retryDemoStartFenRef.current = null;
     retryAttemptUciRef.current = null;
+    // Reset contest state
+    demoMoveLogRef.current = [];
+    setDemoMoveLog([]);
+    setContestCycle(0);
+    setContestStartIdx(null);
+    setContestUserSan(null);
+    setContestEngineSan(null);
+    setContestResultText(null);
+    contestStartFenRef.current = null;
+    contestUserUciRef.current = null;
+    contestPostUserFenRef.current = null;
     // Resume the clock so the CPU's turn can run out normally
     clockRef.current.resume();
   }, []);
@@ -1369,6 +1472,181 @@ export default function PlayView({
   }, []);
 
   // Continue (after reveal or correct answer)
+  // ----- Contest mode --------------------------------------------------
+  // User clicks a move in the demo line to branch into a "what if" variation.
+  // The board jumps to the position before that move, the user plays an
+  // alternative, and the engine responds at FULL strength (no ELO limiting).
+  const onContestMove = useCallback(
+    (demoIdx: number) => {
+      if (contestCycle >= 3) return;
+      if (demoIdx < 0 || demoIdx >= demoMoveLog.length) return;
+      // Remember which sub-phase to return to on Back-to-lesson
+      contestReturnSubPhaseRef.current = coachSubPhase as CoachSubPhase;
+      const target = demoMoveLog[demoIdx];
+      contestStartFenRef.current = target.fenBefore;
+      contestUserUciRef.current = null;
+      contestPostUserFenRef.current = null;
+      setContestStartIdx(demoIdx);
+      setContestUserSan(null);
+      setContestEngineSan(null);
+      setContestResultText(null);
+      setDemoPosition(target.fenBefore);
+      setDemoArrow(null);
+      setCoachSubPhase('contesting');
+    },
+    [contestCycle, demoMoveLog, coachSubPhase]
+  );
+
+  const onContestExit = useCallback(() => {
+    // Restore the lesson view: clear the contest position override, bump the
+    // contest cycle counter (so colors advance for the next contest), and
+    // return to whichever retry sub-phase the user came from.
+    setDemoPosition(null);
+    setDemoArrow(null);
+    setCoachSubPhase(contestReturnSubPhaseRef.current);
+    setContestCycle((c) => Math.min(3, c + 1));
+  }, []);
+
+  // ----- Contest analysis effect (engine analyzing user's contest attempt)
+  // When in 'contest-analyzing', wait for the engine's full-strength PV from
+  // the post-attempt position. Then play out 1-3 plies of refutation depending
+  // on whether captures are still happening.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'contest-analyzing') return;
+    if (sf.lines.length === 0) return;
+    const primary = sf.lines[0];
+    if (primary.depth < 14) return; // full-strength threshold for contest
+
+    const startFen = contestPostUserFenRef.current;
+    if (!startFen) {
+      setCoachSubPhase('contest-result');
+      return;
+    }
+
+    const pvTokens = primary.pv.trim().split(/\s+/).filter(Boolean);
+    if (pvTokens.length === 0) return;
+
+    // Staleness guard
+    try {
+      const g = new Chess(startFen);
+      const r = g.move({
+        from: pvTokens[0].slice(0, 2),
+        to: pvTokens[0].slice(2, 4),
+        promotion: pvTokens[0].slice(4, 5) || 'q',
+      });
+      if (!r) return;
+    } catch {
+      return;
+    }
+
+    // Save the PV for the playout effect
+    coachRefutationRef.current = pvTokens.slice(0, 6);
+    setCoachSubPhase('contest-playout');
+  }, [coachActive, coachSubPhase, sf.lines]);
+
+  // ----- Contest playout effect ------------------------------------------
+  // Plays the engine's response (up to 3 plies, trade-aware), shows result.
+  useEffect(() => {
+    if (!coachActive || coachSubPhase !== 'contest-playout') return;
+    const queue = coachRefutationRef.current;
+    const startFen = contestPostUserFenRef.current;
+    if (!startFen || queue.length === 0) {
+      setCoachSubPhase('contest-result');
+      return;
+    }
+
+    let cancelled = false;
+    let pos = startFen;
+    let idx = 0;
+    let nonCaptureStreak = 0;
+    const SOFT_CAP = 4;
+    const HARD_CAP = 6;
+    let firstResponseSan: string | null = null;
+    const humanColor: 'w' | 'b' = computerPlays === 'w' ? 'b' : 'w';
+    const startBalance = relativeMaterial(startFen, humanColor);
+
+    const finish = () => {
+      if (cancelled) return;
+      setDemoArrow(null);
+      const finalBalance = relativeMaterial(pos, humanColor);
+      const delta = startBalance - finalBalance;
+      let resultText: string;
+      if (delta >= 2) {
+        resultText = `Engine wins about ${delta.toFixed(0)} pawns of material against your move.`;
+      } else if (delta >= 1) {
+        resultText = `Engine wins ~${delta.toFixed(0)} pawn material in this line.`;
+      } else if (delta <= -1) {
+        resultText = `Your move actually gains ${Math.abs(delta).toFixed(0)} pawn(s) of material — interesting choice!`;
+      } else {
+        resultText = `No material change — position holds, but engine had ${
+          firstResponseSan ?? 'a different reply'
+        } as the strongest response.`;
+      }
+      setContestEngineSan(firstResponseSan);
+      setContestResultText(resultText);
+      setCoachSubPhase('contest-result');
+    };
+
+    const playNext = () => {
+      if (cancelled) return;
+      if (idx >= queue.length || idx >= HARD_CAP) {
+        setTimeout(finish, 1000);
+        return;
+      }
+      const uci = queue[idx];
+      if (!uci || uci.length < 4) {
+        finish();
+        return;
+      }
+      // Color contest moves by current cycle for visual distinction
+      const cycleColors = ['#a855f7', '#14b8a6', '#f59e0b'];
+      const arrowColor = cycleColors[contestCycle % 3];
+      setDemoArrow({
+        from: uci.slice(0, 2) as Square,
+        to: uci.slice(2, 4) as Square,
+        color: arrowColor,
+      });
+      setTimeout(() => {
+        if (cancelled) return;
+        const g = new Chess(pos);
+        try {
+          const m = g.move({
+            from: uci.slice(0, 2),
+            to: uci.slice(2, 4),
+            promotion: uci.slice(4, 5) || 'q',
+          });
+          const isCapture = !!m?.captured || (m?.flags?.includes('e') ?? false);
+          if (isCapture) soundRef.current.play('capture');
+          else if (g.inCheck()) soundRef.current.play('check');
+          else soundRef.current.play('move');
+          pos = g.fen();
+          setDemoPosition(pos);
+          setDemoArrow(null);
+          if (m && idx === 0) firstResponseSan = m.san;
+          idx++;
+          if (isCapture) nonCaptureStreak = 0;
+          else nonCaptureStreak++;
+          const isTerminal = g.isGameOver();
+          const settled = nonCaptureStreak >= 2;
+          const softLimit = idx >= SOFT_CAP && !isCapture;
+          if (isTerminal || settled || softLimit) {
+            setTimeout(finish, 1100);
+            return;
+          }
+          setTimeout(playNext, 750);
+        } catch {
+          finish();
+        }
+      }, 600);
+    };
+
+    const kick = setTimeout(playNext, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(kick);
+    };
+  }, [coachActive, coachSubPhase, computerPlays, contestCycle]);
+
   const coachContinue = useCallback(() => {
     // If we're in 'reveal', apply the engine's best move now
     if (coachSubPhase === 'reveal') {
@@ -1478,7 +1756,9 @@ export default function PlayView({
       coachSubPhase === 'rewinding' ||
       coachSubPhase === 'retry-analyzing' ||
       coachSubPhase === 'retry-demo' ||
-      coachSubPhase === 'analyzing');
+      coachSubPhase === 'analyzing' ||
+      coachSubPhase === 'contest-analyzing' ||
+      coachSubPhase === 'contest-playout');
 
   return (
     <div className="max-w-7xl mx-auto p-2 md:p-4">
@@ -1537,6 +1817,10 @@ export default function PlayView({
                   {coachSubPhase === 'explain' && 'Coach · your turn'}
                   {coachSubPhase === 'retry-analyzing' && 'Coach · checking'}
                   {coachSubPhase === 'retry-demo' && 'Testing your idea'}
+                  {coachSubPhase === 'contesting' && 'Contesting · your move'}
+                  {coachSubPhase === 'contest-analyzing' && 'Contesting · engine'}
+                  {coachSubPhase === 'contest-playout' && 'Contesting · playout'}
+                  {coachSubPhase === 'contest-result' && 'Contest result'}
                   {coachSubPhase === 'retry-wrong' && 'Try again'}
                   {coachSubPhase === 'retry-correct' && 'Nice!'}
                   {coachSubPhase === 'reveal' && 'Answer revealed'}
@@ -1650,9 +1934,17 @@ export default function PlayView({
                   badMoveSan={coachBadMoveSan}
                   lastAttemptSan={coachLastAttemptSan}
                   retryRefutationText={retryRefutationText}
+                  demoMoveLog={demoMoveLog}
+                  contestCycle={contestCycle}
+                  contestStartIdx={contestStartIdx}
+                  contestUserSan={contestUserSan}
+                  contestEngineSan={contestEngineSan}
+                  contestResultText={contestResultText}
                   onSkip={coachSkip}
                   onShowSolution={coachShowSolution}
                   onContinue={coachContinue}
+                  onContestMove={onContestMove}
+                  onContestExit={onContestExit}
                 />
               )}
               <GameStatusPanel

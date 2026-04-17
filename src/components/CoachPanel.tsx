@@ -1,9 +1,25 @@
 'use client';
 
-import { GraduationCap, Eye, CheckCircle, XCircle, ArrowRight, Lightbulb } from 'lucide-react';
+import { GraduationCap, Eye, CheckCircle, XCircle, ArrowRight, Lightbulb, GitBranch, Undo2 } from 'lucide-react';
 import { NAG_META } from '@/lib/accuracy';
 import type { CoachExplanation } from '@/lib/coaching';
 import { severityLabel } from '@/lib/coaching';
+
+export interface DemoMove {
+  uci: string;
+  san: string;
+  fenBefore: string;
+  fenAfter: string;
+  mover: 'w' | 'b'; // color who played the move
+  ply: number; // half-move number within the demo line (0-indexed)
+}
+
+// Up to 3 contest cycles, each gets its own color tint
+export const CONTEST_COLORS = [
+  { bg: 'rgba(168, 85, 247, 0.18)', border: '#a855f7', text: '#c084fc' }, // purple
+  { bg: 'rgba(20, 184, 166, 0.18)', border: '#14b8a6', text: '#2dd4bf' }, // teal
+  { bg: 'rgba(245, 158, 11, 0.18)', border: '#f59e0b', text: '#fbbf24' }, // amber
+];
 
 export type CoachSubPhase =
   | 'analyzing' // engine still computing best move
@@ -17,6 +33,10 @@ export type CoachSubPhase =
   | 'retry-correct' // just tried and it was the engine's exact #1
   | 'retry-good' // not THE best, but reasonable enough — apply + celebrate, show what was best
   | 'reveal' // out of tries or gave up — here's the answer
+  | 'contesting' // user has jumped into the demo line at some position; needs to play an alternative
+  | 'contest-analyzing' // engine analyzing the user's contest attempt (full strength)
+  | 'contest-playout' // engine playing out its response to the contest at full strength
+  | 'contest-result' // showing what happened in the contest variation
   | 'done'; // finished, waiting for continue
 
 interface CoachPanelProps {
@@ -26,9 +46,18 @@ interface CoachPanelProps {
   badMoveSan: string;
   lastAttemptSan: string | null;
   retryRefutationText: string | null; // what happens after a wrong retry attempt
+  // Contest-mode props
+  demoMoveLog: DemoMove[]; // moves the demo just played out (clickable to contest)
+  contestCycle: number; // 0..2, used for color coding contest moves
+  contestStartIdx: number | null; // which demo move the user contested
+  contestUserSan: string | null; // user's contested move
+  contestEngineSan: string | null; // engine's response
+  contestResultText: string | null; // outcome description
   onSkip: () => void; // keep bad move, continue
   onShowSolution: () => void; // give up, show best, apply it
   onContinue: () => void; // proceed after reveal / correct answer
+  onContestMove: (demoMoveIdx: number) => void; // jump into the demo line at this point
+  onContestExit: () => void; // back to the lesson from contest mode
 }
 
 export default function CoachPanel({
@@ -38,10 +67,32 @@ export default function CoachPanel({
   badMoveSan,
   lastAttemptSan,
   retryRefutationText,
+  demoMoveLog,
+  contestCycle,
+  contestStartIdx,
+  contestUserSan,
+  contestEngineSan,
+  contestResultText,
   onSkip,
   onShowSolution,
   onContinue,
+  onContestMove,
+  onContestExit,
 }: CoachPanelProps) {
+  const inContestFlow =
+    subPhase === 'contesting' ||
+    subPhase === 'contest-analyzing' ||
+    subPhase === 'contest-playout' ||
+    subPhase === 'contest-result';
+  // Show clickable demo history during retry-wrong / retry-good / reveal /
+  // contest-result so the user can branch into "what if" alternatives.
+  const showDemoHistory =
+    !inContestFlow &&
+    demoMoveLog.length > 0 &&
+    (subPhase === 'retry-wrong' ||
+      subPhase === 'retry-good' ||
+      subPhase === 'reveal' ||
+      subPhase === 'explain');
   const severity = explanation?.severity ?? 'blunder';
   const meta = NAG_META[severity];
 
@@ -236,7 +287,126 @@ export default function CoachPanel({
             </button>
           </>
         )}
+        {/* Contest sub-phases */}
+        {subPhase === 'contesting' && (
+          <ContestPanelBody
+            cycle={contestCycle}
+            heading="Your turn — play any move you want to test."
+            subline={
+              contestStartIdx !== null
+                ? `Branching from move ${contestStartIdx + 1} of the line above.`
+                : null
+            }
+          />
+        )}
+
+        {subPhase === 'contest-analyzing' && (
+          <ContestPanelBody
+            cycle={contestCycle}
+            heading={
+              <>
+                Engine checking your move at full strength
+                {contestUserSan ? (
+                  <>
+                    {' '}
+                    (<span className="font-mono font-bold">{contestUserSan}</span>)
+                  </>
+                ) : null}
+                …
+              </>
+            }
+            pulsing
+          />
+        )}
+
+        {subPhase === 'contest-playout' && (
+          <ContestPanelBody
+            cycle={contestCycle}
+            heading="Watching the engine's reply at full strength…"
+            pulsing
+          />
+        )}
+
+        {subPhase === 'contest-result' && (
+          <div
+            className="rounded p-2 space-y-1.5 border"
+            style={{
+              borderColor: CONTEST_COLORS[contestCycle % 3].border,
+              background: CONTEST_COLORS[contestCycle % 3].bg,
+            }}
+          >
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
+              <GitBranch size={12} style={{ color: CONTEST_COLORS[contestCycle % 3].text }} />
+              <span style={{ color: CONTEST_COLORS[contestCycle % 3].text }}>
+                Variation #{contestCycle + 1}
+              </span>
+            </div>
+            <div className="text-[13px] leading-relaxed text-[var(--foreground)]">
+              {contestResultText ?? 'Variation played out.'}
+            </div>
+            {(contestUserSan || contestEngineSan) && (
+              <div className="text-xs font-mono text-[var(--muted)]">
+                {contestUserSan && (
+                  <>
+                    You:{' '}
+                    <span className="font-bold text-[var(--foreground-strong)]">
+                      {contestUserSan}
+                    </span>
+                  </>
+                )}
+                {contestUserSan && contestEngineSan && <span className="mx-2">·</span>}
+                {contestEngineSan && (
+                  <>
+                    Engine:{' '}
+                    <span className="font-bold text-[var(--foreground-strong)]">
+                      {contestEngineSan}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Demo history — shown after a demo plays so the user can branch in */}
+      {showDemoHistory && (
+        <div className="border-t border-[var(--border)] p-3 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--muted)] flex items-center gap-1">
+              <GitBranch size={10} /> Demo line — click to contest
+            </span>
+            {contestCycle > 0 && (
+              <span className="text-[9px] text-[var(--muted)]">
+                {contestCycle}/3 contested
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1 text-xs font-mono">
+            {demoMoveLog.map((m, i) => (
+              <button
+                key={i}
+                onClick={() => onContestMove(i)}
+                disabled={contestCycle >= 3}
+                className={`px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  m.mover === 'w'
+                    ? 'bg-[var(--surface-2)] border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
+                    : 'bg-[var(--background)]/40 border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
+                }`}
+                title={`Click to play a different move at this point`}
+              >
+                {m.mover === 'w' ? `${Math.floor(m.ply / 2) + 1}.` : ''}
+                {m.san}
+              </button>
+            ))}
+          </div>
+          {contestCycle >= 3 && (
+            <p className="text-[10px] text-[var(--muted)]">
+              Contest limit reached for this position. Continue to keep going.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Footer actions — shown during explain / retry-wrong */}
       {(subPhase === 'explain' || subPhase === 'retry-wrong') && (
@@ -257,6 +427,48 @@ export default function CoachPanel({
           </button>
         </div>
       )}
+
+      {/* Contest result footer — back to lesson */}
+      {subPhase === 'contest-result' && (
+        <div className="border-t border-[var(--border)] p-2">
+          <button
+            onClick={onContestExit}
+            className="w-full py-1.5 rounded text-xs flex items-center justify-center gap-1.5 bg-[var(--surface-2)] hover:bg-[var(--border)] text-[var(--foreground)] transition-colors"
+          >
+            <Undo2 size={12} /> Back to the lesson
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContestPanelBody({
+  cycle,
+  heading,
+  subline,
+  pulsing,
+}: {
+  cycle: number;
+  heading: React.ReactNode;
+  subline?: React.ReactNode;
+  pulsing?: boolean;
+}) {
+  const c = CONTEST_COLORS[cycle % 3];
+  return (
+    <div className="rounded p-2 space-y-1 border" style={{ borderColor: c.border, background: c.bg }}>
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
+        <GitBranch size={12} style={{ color: c.text }} />
+        <span style={{ color: c.text }}>Variation #{cycle + 1}</span>
+        {pulsing && (
+          <span
+            className="ml-auto inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+            style={{ background: c.border }}
+          />
+        )}
+      </div>
+      <div className="text-[13px] leading-relaxed text-[var(--foreground)]">{heading}</div>
+      {subline && <div className="text-xs text-[var(--muted)]">{subline}</div>}
     </div>
   );
 }
