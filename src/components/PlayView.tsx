@@ -163,6 +163,9 @@ export default function PlayView({
   // How many times the coach has actually intervened in the current game.
   // Persisted with the game so /review can sum it as "Learning" engagement.
   const coachingMomentsCountRef = useRef(0);
+  // Snapshot of the user's rating at the start of the current game. Saved
+  // with the game so /review can plot your rating trend over time.
+  const gameStartRatingRef = useRef<number | null>(null);
   const [hoverArrow, setHoverArrow] = useState<{ from: Square; to: Square } | null>(null);
   const [annotating, setAnnotating] = useState<{ index: number; x: number; y: number } | null>(null);
 
@@ -1284,6 +1287,7 @@ export default function PlayView({
           white: meta.white,
           black: meta.black,
           coachingMoments: coachingMomentsCountRef.current,
+          userRating: gameStartRatingRef.current ?? undefined,
         }),
       })
         .then((r) => {
@@ -1380,10 +1384,11 @@ export default function PlayView({
     gameHasUserMovesRef.current = false;
     autoSavedKeyRef.current = null;
     coachingMomentsCountRef.current = 0;
+    gameStartRatingRef.current = userRating; // snapshot for /review's progress graph
 
     setCommittedMode(draftMode);
     setGamePhase('playing');
-  }, [sf, clock, draftMode, draftCpuColor, draftCpuElo, draftTc]);
+  }, [sf, clock, draftMode, draftCpuColor, draftCpuElo, draftTc, userRating]);
 
   // Return to setup (quit current game or after game end)
   const backToSetup = useCallback(() => {
@@ -1456,10 +1461,11 @@ export default function PlayView({
       gameHasUserMovesRef.current = false;
       autoSavedKeyRef.current = null;
       coachingMomentsCountRef.current = 0;
+      gameStartRatingRef.current = userRating;
       // Imported game: skip setup and land straight in playing phase
       setGamePhase('playing');
     },
-    [showToast, sf, clock]
+    [showToast, sf, clock, userRating]
   );
 
   useEffect(() => {

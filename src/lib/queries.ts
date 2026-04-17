@@ -23,6 +23,7 @@ export interface Game {
   notes: string | null;
   tags: string | null;
   coaching_moments: number;
+  user_rating: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -47,11 +48,12 @@ export function createGame(data: {
   notes?: string;
   tags?: string;
   coachingMoments?: number;
+  userRating?: number | null;
 }): Game {
   ensureInit();
   const stmt = getDb().prepare(`
-    INSERT INTO games (title, white, black, result, pgn, fen, notes, tags, coaching_moments)
-    VALUES (@title, @white, @black, @result, @pgn, @fen, @notes, @tags, @coaching_moments)
+    INSERT INTO games (title, white, black, result, pgn, fen, notes, tags, coaching_moments, user_rating)
+    VALUES (@title, @white, @black, @result, @pgn, @fen, @notes, @tags, @coaching_moments, @user_rating)
   `);
   const result = stmt.run({
     title: data.title || null,
@@ -63,6 +65,7 @@ export function createGame(data: {
     notes: data.notes || null,
     tags: data.tags || null,
     coaching_moments: data.coachingMoments ?? 0,
+    user_rating: data.userRating ?? null,
   });
   return getGame(result.lastInsertRowid as number)!;
 }

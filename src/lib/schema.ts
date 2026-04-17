@@ -15,6 +15,7 @@ export function initializeDatabase() {
       notes TEXT,
       tags TEXT,
       coaching_moments INTEGER DEFAULT 0,
+      user_rating INTEGER,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -44,5 +45,8 @@ export function initializeDatabase() {
   }>;
   if (!gameCols.some((c) => c.name === 'coaching_moments')) {
     db.exec(`ALTER TABLE games ADD COLUMN coaching_moments INTEGER DEFAULT 0`);
+  }
+  if (!gameCols.some((c) => c.name === 'user_rating')) {
+    db.exec(`ALTER TABLE games ADD COLUMN user_rating INTEGER`);
   }
 }

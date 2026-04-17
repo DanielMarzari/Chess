@@ -15,6 +15,7 @@ import {
   GraduationCap,
 } from 'lucide-react';
 import type { Game } from '@/lib/queries';
+import ProgressGraph from '@/components/ProgressGraph';
 
 type Bucket = {
   label: string;
@@ -255,6 +256,9 @@ export default function ReviewPage() {
           }
         />
       </div>
+
+      {/* Progress trend — rating over time from recorded user_rating snapshots */}
+      <ProgressGraph games={games} outcomeOf={(g) => gameOutcome(g).result} />
 
       {/* Favorite opening — separate card row so the four-card grid above is even */}
       {stats.topOpening && (
