@@ -27,6 +27,8 @@ interface SetupPanelProps {
   tc: TimeControl | null;
   onTcChange: (tc: TimeControl | null) => void;
   onStart: () => void;
+  allowedModes?: GameMode[];
+  tabLabel?: string;
 }
 
 export default function SetupPanel({
@@ -39,7 +41,10 @@ export default function SetupPanel({
   tc,
   onTcChange,
   onStart,
+  allowedModes = ['cpu', 'coach', 'free'],
+  tabLabel,
 }: SetupPanelProps) {
+  const showModeSelector = allowedModes.length > 1;
   const tcGroups = [
     { label: 'Bullet', filter: (t: TimeControl) => t.initialSeconds < 180 },
     { label: 'Blitz', filter: (t: TimeControl) => t.initialSeconds >= 180 && t.initialSeconds < 600 },
@@ -51,58 +56,70 @@ export default function SetupPanel({
     <div className="bg-[var(--surface)] rounded-xl border border-[var(--border)] p-5 space-y-5 w-full max-w-md shadow-xl">
       <div className="flex items-center gap-2">
         <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
-        <h2 className="text-lg font-bold">New Game</h2>
+        <h2 className="text-lg font-bold">{tabLabel ?? 'New Game'}</h2>
       </div>
 
-      {/* Mode */}
-      <div className="space-y-2">
-        <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
-          Mode
-        </label>
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            onClick={() => onModeChange('cpu')}
-            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
-              mode === 'cpu'
-                ? 'bg-[var(--accent)] text-white'
-                : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
-            }`}
+      {/* Mode (only shown when multiple modes are allowed) */}
+      {showModeSelector && (
+        <div className="space-y-2">
+          <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
+            Mode
+          </label>
+          <div
+            className="grid gap-2"
+            style={{ gridTemplateColumns: `repeat(${allowedModes.length}, minmax(0, 1fr))` }}
           >
-            <Bot size={18} />
-            <span className="text-xs font-semibold">vs Computer</span>
-          </button>
-          <button
-            onClick={() => onModeChange('coach')}
-            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
-              mode === 'coach'
-                ? 'bg-[var(--accent)] text-white'
-                : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
-            }`}
-          >
-            <GraduationCap size={18} />
-            <span className="text-xs font-semibold">Training</span>
-          </button>
-          <button
-            onClick={() => onModeChange('free')}
-            className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
-              mode === 'free'
-                ? 'bg-[var(--accent)] text-white'
-                : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
-            }`}
-          >
-            <Users size={18} />
-            <span className="text-xs font-semibold">Free Play</span>
-          </button>
+            {allowedModes.includes('cpu') && (
+              <button
+                onClick={() => onModeChange('cpu')}
+                className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
+                  mode === 'cpu'
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
+                }`}
+              >
+                <Bot size={18} />
+                <span className="text-xs font-semibold">vs Computer</span>
+              </button>
+            )}
+            {allowedModes.includes('coach') && (
+              <button
+                onClick={() => onModeChange('coach')}
+                className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
+                  mode === 'coach'
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
+                }`}
+              >
+                <GraduationCap size={18} />
+                <span className="text-xs font-semibold">Training</span>
+              </button>
+            )}
+            {allowedModes.includes('free') && (
+              <button
+                onClick={() => onModeChange('free')}
+                className={`py-3 px-2 rounded flex flex-col items-center justify-center gap-1 transition-colors ${
+                  mode === 'free'
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)]'
+                }`}
+              >
+                <Users size={18} />
+                <span className="text-xs font-semibold">Free Play</span>
+              </button>
+            )}
+          </div>
         </div>
-        {mode === 'coach' && (
-          <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
-            <span className="text-[var(--accent)] font-semibold">Training mode:</span> Play vs the
-            computer with a coach watching over your shoulder. On any inaccuracy, mistake, or
-            blunder, the game pauses. The coach explains what you missed and gives you 3 tries
-            to find a better move before revealing the best one.
-          </p>
-        )}
-      </div>
+      )}
+
+      {mode === 'coach' && (
+        <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
+          <span className="text-[var(--accent)] font-semibold">Training mode:</span> Play vs the
+          computer with a coach watching over your shoulder. On any inaccuracy, mistake, or
+          blunder, the game pauses. The coach explains what you missed and gives you 3 tries
+          to find a better move before revealing the best one.
+        </p>
+      )}
 
       {/* CPU-specific settings (also shown for coach mode) */}
       {(mode === 'cpu' || mode === 'coach') && (

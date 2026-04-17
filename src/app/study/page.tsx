@@ -1,169 +1,152 @@
 'use client';
 
-import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { CLASSICS } from '@/lib/classics';
-import { Book, Search, Play, ExternalLink } from 'lucide-react';
+import {
+  BookOpen,
+  Crosshair,
+  Flag,
+  Shapes,
+  Sparkles,
+} from 'lucide-react';
+
+interface StudyCategory {
+  id: string;
+  title: string;
+  icon: React.ElementType;
+  description: string;
+  items: string[];
+  comingSoon?: boolean;
+  href?: string;
+}
+
+const CATEGORIES: StudyCategory[] = [
+  {
+    id: 'tactics',
+    title: 'Tactics',
+    icon: Crosshair,
+    description:
+      'Drill the patterns — forks, pins, skewers, discovered attacks, x-rays, back-rank, removing the defender.',
+    items: [
+      'Fork motifs',
+      'Pin & skewer',
+      'Discovered attacks',
+      'Back-rank weaknesses',
+      'Deflection & decoy',
+      'Zwischenzug',
+    ],
+    comingSoon: true,
+  },
+  {
+    id: 'openings',
+    title: 'Openings',
+    icon: BookOpen,
+    description:
+      'Learn the ideas behind your favorite opening systems — core moves, typical middlegame plans, common traps.',
+    items: [
+      "Ruy López",
+      "Italian Game",
+      "Sicilian Defense",
+      "French Defense",
+      "Queen's Gambit",
+      "King's Indian",
+    ],
+    comingSoon: true,
+  },
+  {
+    id: 'endgames',
+    title: 'Endgames',
+    icon: Flag,
+    description:
+      'The games decided when the board is nearly empty. Technique drills with minimal material.',
+    items: [
+      'King & pawn endings',
+      'Rook endings',
+      'Bishop vs knight',
+      'Opposition & triangulation',
+      'Lucena & Philidor',
+      'Pawn races',
+    ],
+    comingSoon: true,
+  },
+  {
+    id: 'patterns',
+    title: 'Patterns',
+    icon: Shapes,
+    description:
+      'Positional motifs that repeat across thousands of games — weak squares, outposts, pawn structures, typical sacrifices.',
+    items: [
+      'Bishop sacrifices on h6/h7',
+      'Greek gift',
+      'Good vs bad bishop',
+      'Isolated queen pawn',
+      'Hanging pawns',
+      'Fianchetto structures',
+    ],
+    comingSoon: true,
+  },
+];
 
 export default function StudyPage() {
-  const [filter, setFilter] = useState('');
-  const [lichessId, setLichessId] = useState('');
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState('');
-
-  const filteredClassics = useMemo(() => {
-    const q = filter.toLowerCase();
-    if (!q) return CLASSICS;
-    return CLASSICS.filter(
-      (g) =>
-        g.white.toLowerCase().includes(q) ||
-        g.black.toLowerCase().includes(q) ||
-        g.event.toLowerCase().includes(q) ||
-        g.opening?.toLowerCase().includes(q) ||
-        g.eco?.toLowerCase().includes(q)
-    );
-  }, [filter]);
-
-  function loadGame(pgn: string) {
-    sessionStorage.setItem('loadPgn', pgn);
-    window.location.href = '/';
-  }
-
-  async function importFromLichess() {
-    // Accept either a game ID (8 chars) or a full URL
-    setImportError('');
-    let id = lichessId.trim();
-    const urlMatch = id.match(/lichess\.org\/(?:game\/)?([a-zA-Z0-9]{8})/);
-    if (urlMatch) id = urlMatch[1];
-    if (!/^[a-zA-Z0-9]{8}$/.test(id)) {
-      setImportError('Enter an 8-character Lichess game ID or a full lichess.org URL');
-      return;
-    }
-
-    setImporting(true);
-    try {
-      const res = await fetch(`https://lichess.org/game/export/${id}?clocks=false&evals=false`, {
-        headers: { Accept: 'application/x-chess-pgn' },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const pgn = await res.text();
-      if (!pgn.includes('[')) throw new Error('Unexpected response');
-      loadGame(pgn);
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : 'Import failed');
-      setImporting(false);
-    }
-  }
-
   return (
-    <div className="max-w-4xl mx-auto p-4 space-y-6">
-      <div className="flex items-center gap-3">
-        <Book size={22} className="text-[var(--accent)]" />
-        <h1 className="text-xl font-bold">Study</h1>
+    <div className="max-w-5xl mx-auto p-4 space-y-6">
+      <div className="flex items-start gap-3">
+        <div className="p-2 rounded bg-[var(--accent)]/10">
+          <Sparkles size={22} className="text-[var(--accent)]" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold">Study</h1>
+          <p className="text-sm text-[var(--muted)] mt-0.5">
+            Learn the recurring ideas of chess — tactics, openings, endgames, and positional
+            patterns. Build the vocabulary that shows up in every game.
+          </p>
+        </div>
       </div>
 
-      {/* Lichess import */}
-      <section className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 space-y-2">
-        <div className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
-          Import from Lichess
-        </div>
-        <div className="flex items-center gap-2">
-          <ExternalLink size={14} className="text-[var(--muted)] shrink-0" />
-          <input
-            type="text"
-            value={lichessId}
-            onChange={(e) => setLichessId(e.target.value)}
-            placeholder="Lichess game URL or 8-character ID"
-            className="flex-1 px-2 py-1.5 text-sm bg-[var(--background)] border border-[var(--border)] rounded focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') importFromLichess();
-            }}
-          />
-          <button
-            onClick={importFromLichess}
-            disabled={importing || !lichessId.trim()}
-            className="px-3 py-1.5 text-sm bg-[var(--accent)] text-white rounded hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
-          >
-            {importing ? 'Loading…' : 'Import'}
-          </button>
-        </div>
-        {importError && <p className="text-xs text-[var(--danger)]">{importError}</p>}
-        <p className="text-[10px] text-[var(--muted)]">
-          e.g. <span className="font-mono">lichess.org/8jR9qErQ</span>
-        </p>
-      </section>
-
-      {/* Classics */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)]">
-            Classic games ({CLASSICS.length})
-          </div>
-          <div className="relative max-w-xs">
-            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
-            <input
-              type="text"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search players, openings…"
-              className="w-full pl-7 pr-2 py-1 text-xs bg-[var(--surface)] border border-[var(--border)] rounded focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-2">
-          {filteredClassics.map((g) => (
-            <div
-              key={g.id}
-              className="bg-[var(--surface)] border border-[var(--border)] rounded p-3 flex items-start gap-3 hover:border-[var(--accent)]/50 transition-colors"
+      <div className="grid md:grid-cols-2 gap-3">
+        {CATEGORIES.map((cat) => {
+          const Icon = cat.icon;
+          return (
+            <section
+              key={cat.id}
+              className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-4 space-y-3"
             >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-semibold text-[var(--foreground-strong)]">{g.white}</span>
-                  <span className="text-xs text-[var(--muted)]">vs</span>
-                  <span className="font-semibold text-[var(--foreground-strong)]">{g.black}</span>
-                  <span
-                    className={`font-mono text-xs ml-auto ${
-                      g.result === '1-0' ? 'text-[var(--accent)]' : g.result === '0-1' ? 'text-[var(--info)]' : 'text-[var(--muted)]'
-                    }`}
-                  >
-                    {g.result}
+              <div className="flex items-center gap-2">
+                <Icon size={18} className="text-[var(--accent)]" />
+                <h2 className="font-semibold text-[var(--foreground-strong)]">{cat.title}</h2>
+                {cat.comingSoon && (
+                  <span className="ml-auto text-[9px] uppercase tracking-wider font-bold px-2 py-0.5 rounded-full bg-[var(--warning)]/20 text-[var(--warning)] border border-[var(--warning)]/40">
+                    Coming soon
                   </span>
-                </div>
-                <div className="text-xs text-[var(--muted)] flex items-center gap-3 flex-wrap">
-                  <span>{g.event}, {g.year}</span>
-                  {g.eco && (
-                    <span>
-                      <span className="font-mono text-[var(--accent)]">{g.eco}</span>{' '}
-                      <span>{g.opening}</span>
-                    </span>
-                  )}
-                </div>
-                {g.notes && <p className="text-xs mt-1 text-[var(--foreground)]">{g.notes}</p>}
+                )}
               </div>
-              <button
-                onClick={() => loadGame(g.pgn)}
-                className="p-2 rounded hover:bg-[var(--surface-2)] transition-colors text-[var(--accent)]"
-                title="Open in board"
-              >
-                <Play size={16} />
-              </button>
-            </div>
-          ))}
-        </div>
+              <p className="text-sm text-[var(--foreground)] leading-relaxed">{cat.description}</p>
+              <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-[var(--muted)]">
+                {cat.items.map((item) => (
+                  <li key={item} className="flex items-center gap-1.5">
+                    <span className="w-1 h-1 rounded-full bg-[var(--accent)]/60" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })}
+      </div>
 
-        {filteredClassics.length === 0 && (
-          <p className="text-center text-[var(--muted)] text-sm py-8">
-            No games match "{filter}"
-          </p>
-        )}
-      </section>
-
-      <p className="text-xs text-[var(--muted)] text-center pt-4 border-t border-[var(--border)]">
-        Next up: "play as the winner" coaching mode is in development — you'll be quizzed on each
-        move after the opening.{' '}
-        <Link href="/" className="text-[var(--accent)] hover:underline">Back to board</Link>
-      </p>
+      <div className="bg-[var(--surface)] border border-dashed border-[var(--border)] rounded-lg p-4 text-center">
+        <p className="text-sm text-[var(--muted)]">
+          Each category will include interactive position sets, spaced-repetition review, and
+          progress tracking per motif. Meanwhile, hop over to{' '}
+          <Link href="/train" className="text-[var(--accent)] hover:underline">
+            Train
+          </Link>{' '}
+          for the existing puzzle trainer or{' '}
+          <Link href="/analyze" className="text-[var(--accent)] hover:underline">
+            Analyze
+          </Link>{' '}
+          to walk through the classics.
+        </p>
+      </div>
     </div>
   );
 }

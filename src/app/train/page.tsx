@@ -3,7 +3,50 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import ChessBoard from '@/components/ChessBoard';
-import { SkipForward, CheckCircle, XCircle } from 'lucide-react';
+import { SkipForward, CheckCircle, XCircle, Dumbbell, Target, Eye } from 'lucide-react';
+
+function TrainTabs({ active }: { active: 'puzzles' | 'drills' | 'vision' }) {
+  return (
+    <div className="flex items-center gap-1 mb-4 p-1 rounded-lg bg-[var(--surface)] border border-[var(--border)] max-w-fit">
+      <TrainTab active={active === 'puzzles'} Icon={Dumbbell} label="Puzzles" />
+      <TrainTab active={active === 'drills'} Icon={Target} label="Drills" soon />
+      <TrainTab active={active === 'vision'} Icon={Eye} label="Board Vision" soon />
+    </div>
+  );
+}
+
+function TrainTab({
+  active,
+  Icon,
+  label,
+  soon,
+}: {
+  active: boolean;
+  Icon: React.ElementType;
+  label: string;
+  soon?: boolean;
+}) {
+  return (
+    <div
+      className={`px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-medium transition-colors ${
+        active
+          ? 'bg-[var(--accent)] text-white'
+          : soon
+            ? 'text-[var(--muted)] cursor-not-allowed opacity-60'
+            : 'text-[var(--muted)] hover:text-[var(--foreground-strong)]'
+      }`}
+      title={soon ? 'Coming soon' : undefined}
+    >
+      <Icon size={13} />
+      {label}
+      {soon && (
+        <span className="ml-1 text-[8px] uppercase tracking-wider font-bold px-1 py-0.5 rounded bg-[var(--warning)]/20 text-[var(--warning)]">
+          Soon
+        </span>
+      )}
+    </div>
+  );
+}
 
 interface Puzzle {
   id: number;
@@ -135,11 +178,13 @@ export default function PuzzlesPage() {
 
   if (noPuzzles) {
     return (
-      <div className="max-w-3xl mx-auto p-8 text-center space-y-4">
-        <h1 className="text-xl font-bold">Puzzles</h1>
-        <p className="text-[var(--muted)]">
-          No puzzles yet. Add puzzles via the API to start training.
-        </p>
+      <div className="max-w-3xl mx-auto p-4">
+        <TrainTabs active="puzzles" />
+        <div className="text-center space-y-4">
+          <h1 className="text-xl font-bold">Puzzles</h1>
+          <p className="text-[var(--muted)]">
+            No puzzles yet. Add puzzles via the API to start training.
+          </p>
         <pre className="text-xs text-left bg-[var(--surface)] p-4 rounded-lg border border-[var(--border)] overflow-x-auto">
 {`POST /api/puzzles
 {
@@ -148,7 +193,8 @@ export default function PuzzlesPage() {
   "theme": "scholar_mate",
   "difficulty": 1
 }`}
-        </pre>
+          </pre>
+        </div>
       </div>
     );
   }
@@ -157,6 +203,7 @@ export default function PuzzlesPage() {
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4">
+      <TrainTabs active="puzzles" />
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Puzzles</h1>
         {stats && (
