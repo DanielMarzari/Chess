@@ -367,7 +367,7 @@ export default function CoachPanel({
                 {contestUserSan && contestEngineSan && <span className="mx-2">·</span>}
                 {contestEngineSan && (
                   <>
-                    Engine:{' '}
+                    Opponent reply:{' '}
                     <span className="font-bold text-[var(--foreground-strong)]">
                       {contestEngineSan}
                     </span>

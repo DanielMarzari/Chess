@@ -522,10 +522,20 @@ export default function PlayView({
           // Trade-aware stop: once exposed AND the trade has settled (2 quiet
           // plies in a row) → stop. Otherwise hard-cap at SOFT_CAP if the
           // last move was non-capture, HARD_CAP unconditionally.
+          //
+          // Purely positional refutations (no material ever shifts) are the
+          // worst case for overstay — without a "loss moment" to anchor on,
+          // the demo used to play ~16 plies of the engine's main variation,
+          // which made the user wonder whether those plies were really best
+          // for both sides. Cap them at 6 plies so the user sees just enough
+          // of the engine's idea to judge whether the resulting position is
+          // worse for them.
+          const POSITIONAL_CAP = 6;
           const tradeSettled = exposedAtIdx !== null && nonCaptureStreak >= 2;
           const softLimit = idx >= SOFT_CAP && !isCapture;
+          const positionalLimit = exposedAtIdx === null && idx >= POSITIONAL_CAP && !isCapture;
 
-          if (isTerminal || tradeSettled || softLimit) {
+          if (isTerminal || tradeSettled || softLimit || positionalLimit) {
             setTimeout(() => {
               if (cancelled) return;
               setDemoArrow(null);
@@ -1877,15 +1887,13 @@ export default function PlayView({
       const delta = startBalance - finalBalance;
       let resultText: string;
       if (delta >= 2) {
-        resultText = `Engine wins about ${delta.toFixed(0)} pawns of material against your move.`;
+        resultText = `Opponent wins about ${delta.toFixed(0)} pawns of material against your move.`;
       } else if (delta >= 1) {
-        resultText = `Engine wins ~${delta.toFixed(0)} pawn material in this line.`;
+        resultText = `Opponent wins ~${delta.toFixed(0)} pawn of material in this line.`;
       } else if (delta <= -1) {
         resultText = `Your move actually gains ${Math.abs(delta).toFixed(0)} pawn(s) of material — interesting choice!`;
       } else {
-        resultText = `No material change — position holds, but engine had ${
-          firstResponseSan ?? 'a different reply'
-        } as the strongest response.`;
+        resultText = `No material change — your position holds up against the opponent's best reply.`;
       }
       setContestEngineSan(firstResponseSan);
       setContestResultText(resultText);
