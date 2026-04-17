@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import ThemeToggle from '@/components/ThemeToggle';
-import { Volume2, Palette, Square, GraduationCap, Type } from 'lucide-react';
-import { writeSetting, type Notation } from '@/hooks/useSettings';
+import { Check, Volume2, Palette, Square, GraduationCap, Type } from 'lucide-react';
+import { useSettings, writeSetting, type Notation } from '@/hooks/useSettings';
 import { NAG_META } from '@/lib/accuracy';
 
 const BOARD_THEMES = [
@@ -24,32 +24,66 @@ const NOTATIONS: { id: Notation; label: string; example: string }[] = [
   { id: 'long', label: 'Long Algebraic', example: 'Ng1-f3' },
 ];
 
+// Shows a brief "Saved ✓" ping next to a setting after it's toggled.
+function useSavedFlash() {
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+  const flash = (key: string) => {
+    setFlashKey(key);
+    setTimeout(() => {
+      setFlashKey((cur) => (cur === key ? null : cur));
+    }, 1400);
+  };
+  return { flashKey, flash };
+}
+
+function SavedBadge({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] text-[var(--success)] font-semibold animate-in fade-in ml-2">
+      <Check size={10} /> saved
+    </span>
+  );
+}
+
 export default function SettingsPage() {
+  // Source-of-truth for settings is useSettings (reads localStorage and
+  // listens for the 'settings-changed' event dispatched by writeSetting).
+  // This guarantees the UI reflects whatever's actually persisted, with
+  // no risk of drift from a separate React-state copy.
+  const settings = useSettings();
+  const { flashKey, flash } = useSavedFlash();
+
   const [boardTheme, setBoardTheme] = useState('brown');
   const [pieceSet, setPieceSet] = useState('default');
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [notation, setNotation] = useState<Notation>('san');
-  const [coachOnBlunder, setCoachOnBlunder] = useState(true);
-  const [coachOnMistake, setCoachOnMistake] = useState(true);
-  const [coachOnInaccuracy, setCoachOnInaccuracy] = useState(true);
-  const [coachOnPositional, setCoachOnPositional] = useState(false);
 
   useEffect(() => {
     setBoardTheme(localStorage.getItem('boardTheme') || 'brown');
     setPieceSet(localStorage.getItem('pieceSet') || 'default');
     setSoundEnabled(localStorage.getItem('soundEnabled') !== 'false');
-    const ln = localStorage.getItem('notation');
-    setNotation(ln === 'figurine' || ln === 'long' ? ln : 'san');
-    setCoachOnBlunder(localStorage.getItem('coachOnBlunder') !== 'false');
-    setCoachOnMistake(localStorage.getItem('coachOnMistake') !== 'false');
-    setCoachOnInaccuracy(localStorage.getItem('coachOnInaccuracy') !== 'false');
-    setCoachOnPositional(localStorage.getItem('coachOnPositional') === 'true');
   }, []);
 
-  function update<T>(key: string, value: T, setter: (v: T) => void) {
+  function updateLocal<T>(key: string, value: T, setter: (v: T) => void) {
     setter(value);
     localStorage.setItem(key, String(value));
     window.dispatchEvent(new CustomEvent('settings-changed'));
+    flash(key);
+  }
+
+  function toggleCoachNag(key: 'coachOnBlunder' | 'coachOnMistake' | 'coachOnInaccuracy') {
+    const current = settings[key];
+    writeSetting(key, !current);
+    flash(key);
+  }
+
+  function toggleCoachPositional() {
+    writeSetting('coachOnPositional', !settings.coachOnPositional);
+    flash('coachOnPositional');
+  }
+
+  function setNotation(value: Notation) {
+    writeSetting('notation', value);
+    flash('notation');
   }
 
   return (
@@ -74,12 +108,13 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 mb-2">
             <Square size={16} className="text-[var(--muted)]" />
             <span>Board</span>
+            <SavedBadge visible={flashKey === 'boardTheme'} />
           </div>
           <div className="grid grid-cols-4 gap-2">
             {BOARD_THEMES.map((t) => (
               <button
                 key={t.id}
-                onClick={() => update('boardTheme', t.id, setBoardTheme)}
+                onClick={() => updateLocal('boardTheme', t.id, setBoardTheme)}
                 className={`rounded border-2 overflow-hidden transition-colors ${
                   boardTheme === t.id ? 'border-[var(--accent)]' : 'border-[var(--border)]'
                 }`}
@@ -100,12 +135,13 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 mb-2">
             <span className="text-[var(--muted)] text-lg leading-none">♞</span>
             <span>Piece set</span>
+            <SavedBadge visible={flashKey === 'pieceSet'} />
           </div>
           <div className="grid grid-cols-2 gap-2">
             {PIECE_SETS.map((s) => (
               <button
                 key={s.id}
-                onClick={() => update('pieceSet', s.id, setPieceSet)}
+                onClick={() => updateLocal('pieceSet', s.id, setPieceSet)}
                 className={`rounded border-2 p-2 text-sm transition-colors ${
                   pieceSet === s.id
                     ? 'border-[var(--accent)] bg-[var(--accent)]/10'
@@ -130,17 +166,15 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2 mb-2">
           <Type size={16} className="text-[var(--muted)]" />
           <span>Move list style</span>
+          <SavedBadge visible={flashKey === 'notation'} />
         </div>
         <div className="grid grid-cols-3 gap-2">
           {NOTATIONS.map((n) => (
             <button
               key={n.id}
-              onClick={() => {
-                setNotation(n.id);
-                writeSetting('notation', n.id);
-              }}
+              onClick={() => setNotation(n.id)}
               className={`rounded border-2 p-3 transition-colors text-left ${
-                notation === n.id
+                settings.notation === n.id
                   ? 'border-[var(--accent)] bg-[var(--accent)]/10'
                   : 'border-[var(--border)] hover:border-[var(--muted)]'
               }`}
@@ -161,61 +195,62 @@ export default function SettingsPage() {
           <GraduationCap size={16} className="text-[var(--muted)]" />
           <span>When should the coach interrupt?</span>
         </div>
-        <div className="space-y-2">
-          <CoachToggle
+        <div className="space-y-1">
+          <CoachToggleButton
             label="Blunders"
             description="Moves that lose a lot of material or miss mate"
             nag="blunder"
-            checked={coachOnBlunder}
-            onChange={(v) => {
-              setCoachOnBlunder(v);
-              writeSetting('coachOnBlunder', v);
-            }}
+            checked={settings.coachOnBlunder}
+            onToggle={() => toggleCoachNag('coachOnBlunder')}
+            saved={flashKey === 'coachOnBlunder'}
           />
-          <CoachToggle
+          <CoachToggleButton
             label="Mistakes"
             description="Moves that significantly worsen your position"
             nag="mistake"
-            checked={coachOnMistake}
-            onChange={(v) => {
-              setCoachOnMistake(v);
-              writeSetting('coachOnMistake', v);
-            }}
+            checked={settings.coachOnMistake}
+            onToggle={() => toggleCoachNag('coachOnMistake')}
+            saved={flashKey === 'coachOnMistake'}
           />
-          <CoachToggle
+          <CoachToggleButton
             label="Inaccuracies"
             description="Small slips — the position still holds but there was better"
             nag="inaccuracy"
-            checked={coachOnInaccuracy}
-            onChange={(v) => {
-              setCoachOnInaccuracy(v);
-              writeSetting('coachOnInaccuracy', v);
-            }}
+            checked={settings.coachOnInaccuracy}
+            onToggle={() => toggleCoachNag('coachOnInaccuracy')}
+            saved={flashKey === 'coachOnInaccuracy'}
           />
         </div>
 
         <div className="border-t border-[var(--border)] pt-3">
-          <label className="flex items-start gap-3 p-2 rounded hover:bg-[var(--surface-2)]/50 cursor-pointer transition-colors">
-            <input
-              type="checkbox"
-              checked={coachOnPositional}
-              onChange={(e) => {
-                setCoachOnPositional(e.target.checked);
-                writeSetting('coachOnPositional', e.target.checked);
-              }}
-              className="mt-1 w-4 h-4 accent-[var(--accent)] shrink-0"
-            />
+          <button
+            onClick={toggleCoachPositional}
+            className="w-full flex items-start gap-3 p-2 rounded hover:bg-[var(--surface-2)]/50 transition-colors text-left"
+          >
+            <span
+              className={`mt-1 w-4 h-4 rounded flex items-center justify-center shrink-0 border transition-colors ${
+                settings.coachOnPositional
+                  ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                  : 'bg-[var(--surface)] border-[var(--border)]'
+              }`}
+            >
+              {settings.coachOnPositional && <Check size={11} strokeWidth={3} />}
+            </span>
             <div className="flex-1">
-              <div className="text-[var(--foreground-strong)] font-medium">
-                Coach on positional mistakes
+              <div className="flex items-center">
+                <span className="text-[var(--foreground-strong)] font-medium">
+                  Coach on positional mistakes
+                </span>
+                <SavedBadge visible={flashKey === 'coachOnPositional'} />
               </div>
               <div className="text-xs text-[var(--muted)] mt-0.5 leading-relaxed">
-                When the engine prefers another move but no material is won or lost in the resulting line.
-                Off by default — beginners benefit more from focusing on tactical errors that lose pieces.
-                Turn on once you're comfortable spotting hanging pieces and want subtler feedback.
+                When the engine prefers another move but no material is won or lost in the
+                resulting line. Off by default — beginners benefit more from focusing on tactical
+                errors that lose pieces. Turn on once you're comfortable spotting hanging pieces
+                and want subtler feedback.
               </div>
             </div>
-          </label>
+          </button>
         </div>
       </section>
 
@@ -224,18 +259,25 @@ export default function SettingsPage() {
         <h2 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] border-b border-[var(--border)] pb-1">
           Audio
         </h2>
-        <label className="flex items-center justify-between gap-4 cursor-pointer">
+        <button
+          onClick={() => updateLocal('soundEnabled', !soundEnabled, setSoundEnabled)}
+          className="w-full flex items-center justify-between gap-4 p-2 rounded hover:bg-[var(--surface-2)]/50 transition-colors"
+        >
           <span className="flex items-center gap-2">
             <Volume2 size={16} className="text-[var(--muted)]" />
             Move sounds
+            <SavedBadge visible={flashKey === 'soundEnabled'} />
           </span>
-          <input
-            type="checkbox"
-            checked={soundEnabled}
-            onChange={(e) => update('soundEnabled', e.target.checked, setSoundEnabled)}
-            className="w-4 h-4 accent-[var(--accent)]"
-          />
-        </label>
+          <span
+            className={`w-4 h-4 rounded flex items-center justify-center border transition-colors ${
+              soundEnabled
+                ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                : 'bg-[var(--surface)] border-[var(--border)]'
+            }`}
+          >
+            {soundEnabled && <Check size={11} strokeWidth={3} />}
+          </span>
+        </button>
       </section>
 
       {/* Keyboard shortcuts */}
@@ -267,28 +309,39 @@ export default function SettingsPage() {
   );
 }
 
-function CoachToggle({
+function CoachToggleButton({
   label,
   description,
   nag,
   checked,
-  onChange,
+  onToggle,
+  saved,
 }: {
   label: string;
   description: string;
   nag: 'blunder' | 'mistake' | 'inaccuracy';
   checked: boolean;
-  onChange: (v: boolean) => void;
+  onToggle: () => void;
+  saved: boolean;
 }) {
   const meta = NAG_META[nag];
   return (
-    <label className="flex items-start gap-3 p-2 rounded hover:bg-[var(--surface-2)]/50 cursor-pointer transition-colors">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-1 w-4 h-4 accent-[var(--accent)] shrink-0"
-      />
+    <button
+      onClick={onToggle}
+      type="button"
+      className="w-full flex items-start gap-3 p-2 rounded hover:bg-[var(--surface-2)]/50 transition-colors text-left"
+    >
+      <span
+        className={`mt-1 w-4 h-4 rounded flex items-center justify-center shrink-0 border transition-colors ${
+          checked
+            ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+            : 'bg-[var(--surface)] border-[var(--border)]'
+        }`}
+        aria-checked={checked}
+        role="checkbox"
+      >
+        {checked && <Check size={11} strokeWidth={3} />}
+      </span>
       <div className="flex-1">
         <div className="flex items-center gap-2">
           <span
@@ -296,15 +349,13 @@ function CoachToggle({
             style={{ background: meta.color }}
           />
           <span className="text-[var(--foreground-strong)] font-medium">{label}</span>
-          <span
-            className="font-mono text-[10px] font-bold"
-            style={{ color: meta.color }}
-          >
+          <span className="font-mono text-[10px] font-bold" style={{ color: meta.color }}>
             {meta.symbol}
           </span>
+          <SavedBadge visible={saved} />
         </div>
         <div className="text-xs text-[var(--muted)] mt-0.5">{description}</div>
       </div>
-    </label>
+    </button>
   );
 }
