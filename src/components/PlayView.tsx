@@ -239,6 +239,18 @@ export default function PlayView({
   const sound = useSound();
   const settings = useSettings();
 
+  // Persist key for the in-progress game. Defined early so the callbacks
+  // below (startGame, backToSetup, etc.) can list clearPersistedGame in
+  // their dep arrays without hitting TDZ during render.
+  const persistKey = `chess-active-game-${tabLabel ?? 'default'}`;
+  const clearPersistedGame = useCallback(() => {
+    try {
+      localStorage.removeItem(persistKey);
+    } catch {
+      /* ignore */
+    }
+  }, [persistKey]);
+
   const onFlag = useCallback(
     (color: 'w' | 'b') => {
       sound.play('defeat');
@@ -307,9 +319,6 @@ export default function PlayView({
     if (nag === 'mistake' && !settings.coachOnMistake) return;
     if (nag === 'inaccuracy' && !settings.coachOnInaccuracy) return;
 
-    // We're going to coach. Mark handled.
-    coachedIndicesRef.current.add(lastIdx);
-
     // Capture the bad move's SAN + UCI, then rewind history by 1.
     const badSan = moveHistory[lastIdx];
     // Rebuild to get UCI
@@ -372,9 +381,15 @@ export default function PlayView({
       fullLine.length > 0 &&
       !lineEndsInMaterialLoss(preFen, fullLine, mover)
     ) {
-      // Already added to coachedIndicesRef above — won't trigger again.
+      // Positional-only bail: this move isn't worth coaching under current
+      // settings. Mark handled so we don't re-examine it on subsequent renders.
+      coachedIndicesRef.current.add(lastIdx);
       return;
     }
+
+    // We're committing to coach this move — mark it handled so re-renders
+    // don't re-trigger after coach state resolves.
+    coachedIndicesRef.current.add(lastIdx);
 
     // DO NOT rewind the game state yet. We want the user to see their move
     // finish animating, then the demo plays out the consequences, THEN we
@@ -1086,10 +1101,22 @@ export default function PlayView({
   const requestMoveRef = useRef(sf.requestMove);
   requestMoveRef.current = sf.requestMove;
 
+  // In coach mode, we need the engine to have analyzed the post-user-move
+  // position to at least depth 14 before letting the CPU reply. Otherwise the
+  // coach trigger (which requires depth ≥ 14 to trust the PV) never gets a
+  // chance to fire: the CPU's response overwrites the position and the trigger
+  // bails because `lastIdx` now points at the CPU's move. Without this gate,
+  // coaching silently stops working.
+  const coachWaitingForAnalysis =
+    committedMode === 'coach' &&
+    moveHistory.length > 0 &&
+    !coachedIndicesRef.current.has(moveHistory.length - 1) &&
+    (sf.lines[0]?.depth ?? 0) < 14;
   const cpuToMove =
     gamePhase === 'playing' &&
     (committedMode === 'cpu' || committedMode === 'coach') &&
     !coachActive &&
+    !coachWaitingForAnalysis &&
     !!computerPlays &&
     currentMoveIndex === moveHistory.length - 1 &&
     game.turn() === computerPlays &&
@@ -1312,7 +1339,10 @@ export default function PlayView({
   useEffect(() => {
     if (!gameResult) return;
     autoSaveCurrentGame();
-  }, [gameResult, autoSaveCurrentGame]);
+    // Game is over — stop hanging onto the persisted copy. A new game will
+    // write a fresh entry when the user hits Start.
+    clearPersistedGame();
+  }, [gameResult, autoSaveCurrentGame, clearPersistedGame]);
 
   // Adaptive rating update — fires once whenever a Mentor (adaptive) game
   // ends. Translates the result into 1/0.5/0 from the human's perspective
@@ -1397,7 +1427,9 @@ export default function PlayView({
 
     setCommittedMode(draftMode);
     setGamePhase('playing');
-  }, [sf, clock, draftMode, draftCpuColor, draftCpuElo, draftTc, userRating]);
+    // Overwrite any previously-persisted game; this one is the current one.
+    clearPersistedGame();
+  }, [sf, clock, draftMode, draftCpuColor, draftCpuElo, draftTc, userRating, clearPersistedGame]);
 
   // Return to setup (quit current game or after game end)
   const backToSetup = useCallback(() => {
@@ -1412,8 +1444,9 @@ export default function PlayView({
     clock.disable();
     setGameResult(null);
     gameResultShownRef.current = null;
+    clearPersistedGame();
     setGamePhase('setup');
-  }, [sf, clock, gameResult, autoSaveCurrentGame]);
+  }, [sf, clock, gameResult, autoSaveCurrentGame, clearPersistedGame]);
 
   const undoMove = useCallback(() => {
     if (moveHistory.length === 0) return;
@@ -1484,6 +1517,110 @@ export default function PlayView({
       importPgn(pgn);
     }
   }, [importPgn]);
+
+  // ------- In-progress game persistence ----------------------------------
+  // We stash the current Mentor/Explore game in localStorage so navigating
+  // to /review or /settings and back doesn't blow it away. Clocks are NOT
+  // restored — they can't meaningfully track time that passed on another tab.
+  // `persistKey` and `clearPersistedGame` are defined earlier in the component
+  // so startGame/backToSetup can depend on them without TDZ issues.
+
+  // One-shot restore on mount. Skips when a 'loadPgn' handoff is in flight
+  // (that's an explicit "open in Explore" request from /review).
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      if (sessionStorage.getItem('loadPgn')) return;
+      const raw = localStorage.getItem(persistKey);
+      if (!raw) return;
+      const s = JSON.parse(raw) as {
+        moveHistory: string[];
+        positions: string[];
+        currentMoveIndex: number;
+        committedMode: GameMode;
+        computerPlays: 'w' | 'b' | null;
+        boardOrientation: 'white' | 'black';
+        coachingMoments: number;
+        gameStartRating: number | null;
+        annotations: Record<number, string>;
+        cpuElo: number;
+        cpuColor: OpponentColor;
+      };
+      if (!Array.isArray(s.moveHistory) || !Array.isArray(s.positions)) return;
+      const fen = s.positions[s.currentMoveIndex + 1] || s.positions[0];
+      const g = new Chess(fen);
+      setGame(g);
+      setMoveHistory(s.moveHistory);
+      setPositions(s.positions);
+      setCurrentMoveIndex(s.currentMoveIndex);
+      setCommittedMode(s.committedMode);
+      setComputerPlays(s.computerPlays);
+      setBoardOrientation(s.boardOrientation);
+      setAnnotations(s.annotations ?? {});
+      coachingMomentsCountRef.current = s.coachingMoments ?? 0;
+      gameStartRatingRef.current = s.gameStartRating ?? null;
+      // Prior moves already played; treat as user-authored so auto-save fires
+      // on end-of-game the same way it would for a fresh session.
+      gameHasUserMovesRef.current = s.moveHistory.length > 0;
+      autoSavedKeyRef.current = null;
+      if (s.committedMode === 'cpu' || s.committedMode === 'coach') {
+        if (!sf.opponentEnabled) sf.toggleOpponent();
+        sf.setOpponentColor(s.cpuColor);
+        sf.setElo(s.cpuElo);
+      }
+      clock.disable();
+      setMoveEvals([]);
+      setNags([]);
+      setGamePhase('playing');
+    } catch {
+      try {
+        localStorage.removeItem(persistKey);
+      } catch {
+        /* ignore */
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist whenever meaningful state changes while playing. Debounced
+  // implicitly: React batches state updates, so one persist per render.
+  useEffect(() => {
+    if (gamePhase !== 'playing') return;
+    try {
+      localStorage.setItem(
+        persistKey,
+        JSON.stringify({
+          moveHistory,
+          positions,
+          currentMoveIndex,
+          committedMode,
+          computerPlays,
+          boardOrientation,
+          coachingMoments: coachingMomentsCountRef.current,
+          gameStartRating: gameStartRatingRef.current,
+          annotations,
+          cpuElo: draftCpuElo,
+          cpuColor: draftCpuColor,
+        })
+      );
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [
+    gamePhase,
+    persistKey,
+    moveHistory,
+    positions,
+    currentMoveIndex,
+    committedMode,
+    computerPlays,
+    boardOrientation,
+    annotations,
+    draftCpuElo,
+    draftCpuColor,
+  ]);
 
   const exportPgn = useCallback(() => {
     const pgn = buildPgn(moveHistory, getPgnMeta());
