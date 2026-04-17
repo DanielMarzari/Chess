@@ -122,20 +122,25 @@ export default function ReviewRunner({ game }: { game: Game }) {
 
   // Initialize Stockfish worker
   useEffect(() => {
-    const worker = new Worker(new URL('/stockfish.js', import.meta.url), { type: 'module' });
-    workerRef.current = worker;
+    try {
+      const worker = new Worker('/stockfish/stockfish.js');
+      workerRef.current = worker;
 
-    worker.onmessage = (e) => {
-      const msg = e.data;
-      if (msg === 'uciok') {
-        readyRef.current = true;
-      }
-    };
+      worker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg === 'uciok') {
+          readyRef.current = true;
+        }
+      };
 
-    worker.postMessage('uci');
-    return () => {
-      worker.terminate();
-    };
+      worker.postMessage('uci');
+      return () => {
+        worker.terminate();
+      };
+    } catch (err) {
+      console.error('Failed to init Stockfish:', err);
+      return () => {};
+    }
   }, []);
 
   // Parse PGN and analyze
