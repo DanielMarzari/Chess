@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Chess, type Square } from 'chess.js';
 import ChessBoard, { type ChessboardRef } from '@/components/ChessBoard';
 import MoveHistory from '@/components/MoveHistory';
+import MoveInsight from '@/components/MoveInsight';
 import GameControls from '@/components/GameControls';
 import EngineAnalysis from '@/components/EngineAnalysis';
 import EvalBar from '@/components/EvalBar';
@@ -1050,7 +1051,19 @@ export default function PlayView({
       const afterWhite = cpToWinPercent(after, moveEvals[i]?.mate ?? null);
       const winLoss = mover === 'w' ? beforeWhite - afterWhite : afterWhite - beforeWhite;
       const cpLoss = Math.max(0, winLoss * 10);
-      newNags.push(classifyMove(cpLoss, { isBest, isCapture, isCheck }));
+      // Pass mover-perspective eval so classifyMove can flag a "miss"
+      // (was winning, gave back ground without blundering).
+      const evalBeforeFromMover = mover === 'w' ? before : -before;
+      const evalAfterFromMover = mover === 'w' ? after : -after;
+      newNags.push(
+        classifyMove(cpLoss, {
+          isBest,
+          isCapture,
+          isCheck,
+          evalBeforeFromMover,
+          evalAfterFromMover,
+        })
+      );
     }
     setNags(newNags);
   }, [moveEvals, moveHistory]);
@@ -2430,12 +2443,22 @@ export default function PlayView({
               <MoveHistory
                 moves={moveHistory}
                 nags={nags}
+                evals={moveEvals}
                 annotations={annotations}
                 currentMoveIndex={currentMoveIndex}
                 onMoveClick={goToMove}
                 onAnnotate={(index, x, y) => setAnnotating({ index, x, y })}
                 notation={settings.notation}
               />
+              {currentMoveIndex >= 0 && (
+                <MoveInsight
+                  moves={moveHistory}
+                  nags={nags}
+                  evals={moveEvals}
+                  positions={positions}
+                  currentMoveIndex={currentMoveIndex}
+                />
+              )}
               <GameControls
                 onNewGame={backToSetup}
                 onFlipBoard={() => setBoardOrientation((o) => (o === 'white' ? 'black' : 'white'))}

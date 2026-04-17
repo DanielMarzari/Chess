@@ -31,7 +31,16 @@ export function moveAccuracy(
 }
 
 // Classify a move by centipawn-loss threshold
-export type NagType = 'brilliant' | 'great' | 'best' | 'good' | 'book' | 'inaccuracy' | 'mistake' | 'blunder';
+export type NagType =
+  | 'brilliant'
+  | 'great'
+  | 'best'
+  | 'good'
+  | 'book'
+  | 'inaccuracy'
+  | 'miss' // failed to punish opponent's error — eval was winning, move gives back ground but not a blunder
+  | 'mistake'
+  | 'blunder';
 
 // Optional context flags for finer classification. isCapture/isCheck/isSacrifice
 // let us distinguish "great tactical find" from "play-it-safe best move", and
@@ -42,12 +51,33 @@ export interface ClassifyContext {
   isCapture?: boolean;
   isCheck?: boolean;
   isSacrifice?: boolean; // piece we're moving loses net material on next ply
+  // Eval BEFORE the move, from the mover's perspective, in centipawns. Used
+  // to distinguish a "miss" (was winning, gave back ground) from a regular
+  // mistake (went from rough equality to losing).
+  evalBeforeFromMover?: number;
+  evalAfterFromMover?: number;
 }
 
 export function classifyMove(cpLoss: number, ctx: ClassifyContext = {}): NagType | null {
   if (ctx.isBook) return 'book';
-  // Negative classifications come first — a blunder is a blunder even if the
-  // piece being moved happens to capture something.
+  // "Miss" — you were winning clearly (>= +2 pawns from your perspective),
+  // your move gave back significant ground (cpLoss >= 80cp in win-%), but
+  // you're still not losing. This is chess.com's "is a miss" flag: a move
+  // that fails to capitalize on the opponent's error, distinct from a
+  // blunder (which takes you from ok to bad). We check this BEFORE the
+  // blunder/mistake thresholds so a winning-but-sloppy move gets flagged
+  // correctly.
+  if (
+    ctx.evalBeforeFromMover !== undefined &&
+    ctx.evalAfterFromMover !== undefined &&
+    ctx.evalBeforeFromMover >= 200 &&
+    cpLoss >= 80 &&
+    ctx.evalAfterFromMover > -100
+  ) {
+    return 'miss';
+  }
+  // Negative classifications — a blunder is a blunder even if the move
+  // happens to capture something.
   if (cpLoss >= 300) return 'blunder';
   if (cpLoss >= 150) return 'mistake';
   if (cpLoss >= 50) return 'inaccuracy';
@@ -67,6 +97,7 @@ export const NAG_META: Record<NagType, { label: string; symbol: string; color: s
   best: { label: 'Best', symbol: '★', color: '#759900', bg: 'rgba(117,153,0,0.15)' },
   good: { label: 'Good', symbol: '✓', color: '#5a8a3a', bg: 'rgba(90,138,58,0.08)' },
   book: { label: 'Book', symbol: '📖', color: '#a88a64', bg: 'rgba(168,138,100,0.15)' },
+  miss: { label: 'Miss', symbol: '⚠', color: '#c26a00', bg: 'rgba(194,106,0,0.15)' },
   inaccuracy: { label: 'Inaccuracy', symbol: '?!', color: '#e8a300', bg: 'rgba(232,163,0,0.15)' },
   mistake: { label: 'Mistake', symbol: '?', color: '#e68f00', bg: 'rgba(230,143,0,0.15)' },
   blunder: { label: 'Blunder', symbol: '??', color: '#dc322f', bg: 'rgba(220,50,47,0.15)' },

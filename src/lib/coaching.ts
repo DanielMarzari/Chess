@@ -466,6 +466,8 @@ export function severityLabel(nag: NagType): string {
       return 'Teaching moment';
     case 'mistake':
       return 'Worth a look';
+    case 'miss':
+      return 'Missed chance';
     case 'inaccuracy':
       return 'Minor slip';
     default:

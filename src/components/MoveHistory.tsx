@@ -3,13 +3,15 @@
 import { useMemo, useRef } from 'react';
 import { Chess } from 'chess.js';
 import { MessageSquare } from 'lucide-react';
-import type { NagType } from '@/lib/accuracy';
+import type { NagType, PlyEval } from '@/lib/accuracy';
 import { NAG_META } from '@/lib/accuracy';
+import { formatEvalPawns } from '@/lib/describeMove';
 import type { Notation } from '@/hooks/useSettings';
 
 interface MoveHistoryProps {
   moves: string[]; // SAN
   nags: (NagType | null)[];
+  evals?: (PlyEval | null)[];
   annotations: Record<number, string>;
   currentMoveIndex: number;
   onMoveClick: (index: number) => void;
@@ -59,6 +61,7 @@ function toLongAlgebraic(
 export default function MoveHistory({
   moves,
   nags,
+  evals,
   annotations,
   currentMoveIndex,
   onMoveClick,
@@ -114,6 +117,20 @@ export default function MoveHistory({
     const meta = nag ? NAG_META[nag] : null;
     const active = currentMoveIndex === idx;
     const hasAnnotation = !!annotations[idx];
+    const evalEntry = evals?.[idx];
+    const evalText = evalEntry
+      ? formatEvalPawns(evalEntry.score ?? null, evalEntry.mate)
+      : null;
+    // Color the eval by who's winning: positive = white advantage (green),
+    // negative = black advantage (red tint on white's side, or the reverse).
+    // Use a muted palette so the primary NAG color still dominates.
+    const evalColor = evalEntry
+      ? (evalEntry.score ?? 0) > 30
+        ? 'var(--success)'
+        : (evalEntry.score ?? 0) < -30
+          ? 'var(--danger)'
+          : 'var(--muted)'
+      : 'var(--muted)';
 
     return (
       <button
@@ -136,7 +153,15 @@ export default function MoveHistory({
             {meta.symbol}
           </span>
         )}
-        {hasAnnotation && <MessageSquare size={10} className="text-[var(--muted)] shrink-0 ml-auto" />}
+        {evalText && (
+          <span
+            className="font-mono text-[10px] shrink-0 ml-auto tabular-nums"
+            style={{ color: evalColor }}
+          >
+            {evalText}
+          </span>
+        )}
+        {hasAnnotation && <MessageSquare size={10} className="text-[var(--muted)] shrink-0 ml-1" />}
       </button>
     );
   }

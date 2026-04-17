@@ -75,6 +75,7 @@ export default function GameEndModal({
     { type: 'best', label: 'Best' },
     { type: 'good', label: 'Good' },
     { type: 'inaccuracy', label: 'Slips' },
+    { type: 'miss', label: 'Missed wins' },
     { type: 'mistake', label: 'Worth a look' },
     { type: 'blunder', label: 'Teaching moments' },
   ];
