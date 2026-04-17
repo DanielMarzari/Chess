@@ -264,9 +264,11 @@ export function explainMove(input: ExplainInput): CoachExplanation {
     whyBad = `${badMoveSan} missed a forced mate in ${missedMate}. You had the win on the board.`;
   } else if (isTradeRecap && userMovedTarget) {
     // User initiated a trade — opponent's "capture" is just the recapture
-    // completing the exchange, not winning material. Frame it accordingly.
-    const userPieceName = pieceName(userMovedTarget.type); // what the user CAPTURED
-    whyBad = `${badMoveSan} initiates a trade for the ${userPieceName} on ${userToSquare}, but the resulting position favors ${oppName} by about ${dropPawns} pawns of evaluation — the engine prefers ${bestMoveSan} here.`;
+    // completing the exchange, not winning material. Don't reveal the
+    // engine's preferred alternative here; the retry flow gives progressive
+    // hints if the user can't find it.
+    const userPieceName = pieceName(userMovedTarget.type);
+    whyBad = `${badMoveSan} initiates a trade for the ${userPieceName} on ${userToSquare}, but the resulting position drops by about ${dropPawns} pawns of evaluation. There's a stronger move here — see if you can find it.`;
   } else if (oppCapture && oppCapture.ply <= 2) {
     const capturedValue = PIECE_VALUES[oppCapture.capturedType];
     if (capturedValue >= 3) {

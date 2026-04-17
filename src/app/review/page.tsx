@@ -12,6 +12,7 @@ import {
   Trophy,
   Target,
   LineChart,
+  GraduationCap,
 } from 'lucide-react';
 import type { Game } from '@/lib/queries';
 
@@ -100,6 +101,8 @@ export default function ReviewPage() {
       ongoing = 0;
     const eloRatings: number[] = [];
     let longestGame = 0;
+    let totalCoachingMoments = 0;
+    let gamesWithCoaching = 0;
     const buckets: Bucket[] = BUCKETS.map((b) => ({ ...b, wins: 0, losses: 0, draws: 0 }));
     const openingCounts: Record<string, number> = {};
 
@@ -108,6 +111,9 @@ export default function ReviewPage() {
       if (opponentElo !== null) eloRatings.push(opponentElo);
       const moves = countMovesFromPgn(g.pgn);
       if (moves > longestGame) longestGame = moves;
+      const cm = g.coaching_moments ?? 0;
+      totalCoachingMoments += cm;
+      if (cm > 0) gamesWithCoaching += 1;
       if (result === 'win') wins++;
       else if (result === 'loss') losses++;
       else if (result === 'draw') draws++;
@@ -157,6 +163,8 @@ export default function ReviewPage() {
       scoreRate,
       buckets: buckets.filter((b) => b.wins + b.losses + b.draws > 0),
       topOpening,
+      totalCoachingMoments,
+      gamesWithCoaching,
     };
   }, [games]);
 
@@ -237,13 +245,34 @@ export default function ReviewPage() {
           hint={stats.peakElo !== null ? `Peak ${stats.peakElo} ELO` : undefined}
         />
         <StatCard
-          Icon={LineChart}
-          label="Favorite Opening"
-          value={stats.topOpening ? stats.topOpening[0] : '—'}
-          hint={stats.topOpening ? `${stats.topOpening[1]} game${stats.topOpening[1] === 1 ? '' : 's'}` : undefined}
-          ellipsis
+          Icon={GraduationCap}
+          label="Learning"
+          value={`${stats.totalCoachingMoments}`}
+          hint={
+            stats.totalCoachingMoments > 0
+              ? `${stats.gamesWithCoaching} game${stats.gamesWithCoaching === 1 ? '' : 's'} coached`
+              : 'no coaching yet'
+          }
         />
       </div>
+
+      {/* Favorite opening — separate card row so the four-card grid above is even */}
+      {stats.topOpening && (
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-3 flex items-center gap-3">
+          <LineChart size={16} className="text-[var(--accent)]" />
+          <div>
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-[var(--muted)]">
+              Favorite Opening
+            </div>
+            <div className="text-sm font-semibold text-[var(--foreground-strong)]">
+              {stats.topOpening[0]}{' '}
+              <span className="text-xs text-[var(--muted)] font-normal">
+                · {stats.topOpening[1]} game{stats.topOpening[1] === 1 ? '' : 's'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Performance by ELO bucket */}
       {stats.buckets.length > 0 && (
@@ -355,6 +384,11 @@ export default function ReviewPage() {
                     {game.black && <span>{game.black}</span>}
                     {opponentElo && <span className="font-mono">({opponentElo})</span>}
                     <span className="text-[10px] opacity-70">{moves} plies</span>
+                    {(game.coaching_moments ?? 0) > 0 && (
+                      <span className="text-[10px] text-[var(--accent)]">
+                        🎓 {game.coaching_moments} coaching
+                      </span>
+                    )}
                   </div>
                 </div>
                 <button

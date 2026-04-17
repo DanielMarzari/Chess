@@ -14,6 +14,7 @@ export function initializeDatabase() {
       fen TEXT,
       notes TEXT,
       tags TEXT,
+      coaching_moments INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -36,4 +37,12 @@ export function initializeDatabase() {
       attempted_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Migrations for existing tables that may pre-date later columns.
+  const gameCols = db.prepare(`PRAGMA table_info(games)`).all() as Array<{
+    name: string;
+  }>;
+  if (!gameCols.some((c) => c.name === 'coaching_moments')) {
+    db.exec(`ALTER TABLE games ADD COLUMN coaching_moments INTEGER DEFAULT 0`);
+  }
 }

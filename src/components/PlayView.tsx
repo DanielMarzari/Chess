@@ -160,6 +160,9 @@ export default function PlayView({
   // adds moves to them.
   const gameHasUserMovesRef = useRef(false);
   const autoSavedKeyRef = useRef<string | null>(null);
+  // How many times the coach has actually intervened in the current game.
+  // Persisted with the game so /review can sum it as "Learning" engagement.
+  const coachingMomentsCountRef = useRef(0);
   const [hoverArrow, setHoverArrow] = useState<{ from: Square; to: Square } | null>(null);
   const [annotating, setAnnotating] = useState<{ index: number; x: number; y: number } | null>(null);
 
@@ -194,6 +197,11 @@ export default function PlayView({
   const [demoArrow, setDemoArrow] = useState<{ from: Square; to: Square; color?: string } | null>(null);
   // The refutation PV we captured from the engine at trigger time (UCI moves).
   const coachRefutationRef = useRef<string[]>([]);
+  // Top 3 best-move UCIs from preFen (captured during analyzing→explain).
+  // Used to give progressive square hints during retry-wrong:
+  //   - 2 attempts left (after first miss): highlight FROM-squares of all 3
+  //   - 1 attempt left  (after second miss): highlight FROM-square of top 1
+  const [coachTop3Ucis, setCoachTop3Ucis] = useState<string[]>([]);
   // Retry-demo queue + text (populated when user plays a wrong retry attempt)
   const retryDemoQueueRef = useRef<string[]>([]);
   const retryDemoStartFenRef = useRef<string | null>(null);
@@ -365,6 +373,9 @@ export default function PlayView({
 
     // Pause the clock immediately so no time bleeds during the lesson.
     clockRef.current.pause();
+
+    // Count this as a coaching moment for engagement tracking
+    coachingMomentsCountRef.current += 1;
 
     // Activate coach; demo starts after a brief pause.
     setCoachActive(true);
@@ -830,6 +841,14 @@ export default function PlayView({
     coachBestMoveUciRef.current = bestUci;
     coachBestPvRef.current = pvTokens;
 
+    // Capture the FIRST move of each of the top-3 PVs (engine MultiPV is set
+    // to 3 in useStockfish). Used by retry-wrong to give progressive hints.
+    const top3 = sf.lines
+      .slice(0, 3)
+      .map((line) => line.pv?.trim().split(/\s+/)[0])
+      .filter((u): u is string => !!u && u.length >= 4);
+    setCoachTop3Ucis(top3);
+
     // Compute engine's response PV from post-bad-move position (to explain "why bad").
     // We analyze that separately inline — we can compute it lazily by
     // instantiating a Chess object and using the main analysis' PV that exists
@@ -1264,6 +1283,7 @@ export default function PlayView({
           title: `${meta.white} vs ${meta.black} — ${meta.date}${note ? ' (' + note + ')' : ''}`,
           white: meta.white,
           black: meta.black,
+          coachingMoments: coachingMomentsCountRef.current,
         }),
       })
         .then((r) => {
@@ -1303,7 +1323,12 @@ export default function PlayView({
       actual = 0.5;
     }
     const opponentRating = sf.elo;
-    const newRating = updateRating(userRating, opponentRating, actual);
+    const newRating = updateRating(
+      userRating,
+      opponentRating,
+      actual,
+      coachingMomentsCountRef.current
+    );
     setUserRatingState(newRating);
     writeUserRating(newRating);
   }, [adaptiveElo, gameResult, committedMode, computerPlays, sf.elo, userRating, moveHistory.length]);
@@ -1351,9 +1376,10 @@ export default function PlayView({
     setAnnotations({});
     setGameResult(null);
     gameResultShownRef.current = null;
-    // Reset auto-save tracking for the new game
+    // Reset auto-save + coaching engagement tracking for the new game
     gameHasUserMovesRef.current = false;
     autoSavedKeyRef.current = null;
+    coachingMomentsCountRef.current = 0;
 
     setCommittedMode(draftMode);
     setGamePhase('playing');
@@ -1429,6 +1455,7 @@ export default function PlayView({
       // Imported game: don't auto-save unless the user adds moves to it.
       gameHasUserMovesRef.current = false;
       autoSavedKeyRef.current = null;
+      coachingMomentsCountRef.current = 0;
       // Imported game: skip setup and land straight in playing phase
       setGamePhase('playing');
     },
@@ -1887,6 +1914,21 @@ export default function PlayView({
 
   // Board position priority: active demo override > hover preview > game state.
   const boardPosition = demoPosition ?? previewFromHover?.fen ?? currentFen;
+
+  // Progressive hints during retry-wrong:
+  //   - First miss (2 attempts left): show FROM-squares of top 3 best moves
+  //   - Second miss (1 attempt left): show FROM-square of top 1 best move
+  // Encourages the user to keep guessing instead of revealing the answer.
+  const hintSquares = useMemo(() => {
+    if (!coachActive || coachSubPhase !== 'retry-wrong') return [];
+    if (coachAttemptsLeft === 2 && coachTop3Ucis.length > 0) {
+      return Array.from(new Set(coachTop3Ucis.map((u) => u.slice(0, 2))));
+    }
+    if (coachAttemptsLeft === 1 && coachTop3Ucis.length > 0) {
+      return [coachTop3Ucis[0].slice(0, 2)];
+    }
+    return [];
+  }, [coachActive, coachSubPhase, coachAttemptsLeft, coachTop3Ucis]);
   const isCoachBusy =
     coachActive &&
     (coachSubPhase === 'pausing' ||
@@ -1940,6 +1982,7 @@ export default function PlayView({
               lastMove={demoPosition ? null : lastMove}
               externalArrow={coachArrow}
               allowPremoves={allowPremoves && !isCoachBusy}
+              hintSquares={hintSquares}
             />
             {/* Coach overlay — dims the board and labels the state while
                 the coach is running demos/transitions. Drops are already

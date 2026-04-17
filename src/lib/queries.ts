@@ -22,6 +22,7 @@ export interface Game {
   fen: string | null;
   notes: string | null;
   tags: string | null;
+  coaching_moments: number;
   created_at: string;
   updated_at: string;
 }
@@ -45,11 +46,12 @@ export function createGame(data: {
   fen?: string;
   notes?: string;
   tags?: string;
+  coachingMoments?: number;
 }): Game {
   ensureInit();
   const stmt = getDb().prepare(`
-    INSERT INTO games (title, white, black, result, pgn, fen, notes, tags)
-    VALUES (@title, @white, @black, @result, @pgn, @fen, @notes, @tags)
+    INSERT INTO games (title, white, black, result, pgn, fen, notes, tags, coaching_moments)
+    VALUES (@title, @white, @black, @result, @pgn, @fen, @notes, @tags, @coaching_moments)
   `);
   const result = stmt.run({
     title: data.title || null,
@@ -60,6 +62,7 @@ export function createGame(data: {
     fen: data.fen || null,
     notes: data.notes || null,
     tags: data.tags || null,
+    coaching_moments: data.coachingMoments ?? 0,
   });
   return getGame(result.lastInsertRowid as number)!;
 }

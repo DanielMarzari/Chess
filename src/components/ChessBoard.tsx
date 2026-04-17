@@ -23,6 +23,10 @@ interface ChessBoardProps {
   lastMove?: { from: string; to: string } | null;
   externalArrow?: { from: Square; to: Square; color?: string } | null;
   allowPremoves?: boolean;
+  // Squares to highlight as hints — used by Mentor's progressive retry hints.
+  // Rendered with a cyan inset ring so they're visually distinct from
+  // selected squares, last-move tints, premoves, etc.
+  hintSquares?: string[];
 }
 
 const ChessBoardImpl = forwardRef<ChessboardRef, ChessBoardProps>(function ChessBoardImpl(
@@ -36,6 +40,7 @@ const ChessBoardImpl = forwardRef<ChessboardRef, ChessBoardProps>(function Chess
     lastMove,
     externalArrow,
     allowPremoves = false,
+    hintSquares = [],
   },
   ref
 ) {
@@ -107,8 +112,18 @@ const ChessBoardImpl = forwardRef<ChessboardRef, ChessBoardProps>(function Chess
       };
     }
 
+    // Hint squares — cyan inset ring. Layered last so it's always visible
+    // on top of any other tint applied to the same square.
+    for (const sq of hintSquares) {
+      const existing = styles[sq] || {};
+      styles[sq] = {
+        ...existing,
+        boxShadow: 'inset 0 0 0 4px rgba(34, 211, 238, 0.85)', // cyan-400
+      };
+    }
+
     return styles;
-  }, [selectedSquare, legalMoves, lastMove]);
+  }, [selectedSquare, legalMoves, lastMove, hintSquares]);
 
   const arrows: [Square, Square, string?][] = externalArrow
     ? [[externalArrow.from, externalArrow.to, externalArrow.color || '#1da198']]

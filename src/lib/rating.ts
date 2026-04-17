@@ -34,19 +34,34 @@ export function writeUserRating(rating: number) {
 }
 
 /**
- * Standard ELO update.
+ * Per-coaching-moment bonus added to the standard ELO update. Engaging with
+ * the coach (taking time on a flagged move, watching the demo, attempting the
+ * retry) reinforces learning, so we reward it with a small uptick regardless
+ * of game outcome. Capped to keep rating tied to actual skill.
+ */
+const LEARNING_BONUS_PER_MOMENT = 2; // ELO points per coaching moment
+const LEARNING_BONUS_CAP = 12; // never more than ~12 ELO of pure-engagement bonus per game
+
+/**
+ * Standard ELO update with optional learning bonus.
  * @param userRating - your current estimated rating
  * @param opponentRating - the rating of the opponent you just played
  * @param actualScore - 1 (win), 0.5 (draw), 0 (loss)
+ * @param coachingMoments - how many times the coach intervened in this game
  */
 export function updateRating(
   userRating: number,
   opponentRating: number,
-  actualScore: 0 | 0.5 | 1
+  actualScore: 0 | 0.5 | 1,
+  coachingMoments = 0
 ): number {
   const expected = 1 / (1 + Math.pow(10, (opponentRating - userRating) / 400));
   const delta = K_FACTOR * (actualScore - expected);
-  return Math.max(MIN_RATING, Math.min(MAX_RATING, userRating + delta));
+  const learningBonus = Math.min(
+    LEARNING_BONUS_CAP,
+    Math.max(0, coachingMoments) * LEARNING_BONUS_PER_MOMENT
+  );
+  return Math.max(MIN_RATING, Math.min(MAX_RATING, userRating + delta + learningBonus));
 }
 
 /**
