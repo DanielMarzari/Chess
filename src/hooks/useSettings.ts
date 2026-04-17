@@ -8,6 +8,10 @@ export interface Settings {
   coachOnBlunder: boolean;
   coachOnMistake: boolean;
   coachOnInaccuracy: boolean;
+  // Coach on moves where the engine prefers another option but no material
+  // is won or lost in the resulting line. Off by default — beginners rarely
+  // benefit from positional-only lessons, and the demos can feel pedantic.
+  coachOnPositional: boolean;
   notation: Notation;
 }
 
@@ -15,6 +19,7 @@ const DEFAULTS: Settings = {
   coachOnBlunder: true,
   coachOnMistake: true,
   coachOnInaccuracy: true,
+  coachOnPositional: false,
   notation: 'san',
 };
 
@@ -27,6 +32,7 @@ function read(): Settings {
       coachOnBlunder: localStorage.getItem('coachOnBlunder') !== 'false',
       coachOnMistake: localStorage.getItem('coachOnMistake') !== 'false',
       coachOnInaccuracy: localStorage.getItem('coachOnInaccuracy') !== 'false',
+      coachOnPositional: localStorage.getItem('coachOnPositional') === 'true',
       notation,
     };
   } catch {

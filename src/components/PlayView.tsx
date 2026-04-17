@@ -51,6 +51,50 @@ function relativeMaterial(fen: string, perspective: 'w' | 'b'): number {
   }
 }
 
+// Walks `pv` from `startFen` and returns true if the line ends with `perspective`
+// having lost net material of at least `thresholdPawns`. Used to filter out
+// purely positional "mistakes" from triggering the coach when the user has
+// opted out of positional coaching.
+function lineEndsInMaterialLoss(
+  startFen: string,
+  pv: string[],
+  perspective: 'w' | 'b',
+  thresholdPawns = 1,
+  maxPlies = 14
+): boolean {
+  const startBalance = relativeMaterial(startFen, perspective);
+  let pos = startFen;
+  let observedMate = false;
+  for (let i = 0; i < Math.min(pv.length, maxPlies); i++) {
+    const uci = pv[i];
+    if (!uci || uci.length < 4) break;
+    try {
+      const g = new Chess(pos);
+      g.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || 'q' });
+      pos = g.fen();
+      if (g.isCheckmate()) {
+        observedMate = true;
+        break;
+      }
+    } catch {
+      break;
+    }
+  }
+  // Mate against the student counts as a material-losing line for our purposes.
+  if (observedMate) {
+    // Was it our king mated? It's mate in the resulting position; if the side
+    // to move is `perspective`, then `perspective` is being mated.
+    try {
+      const g = new Chess(pos);
+      if (g.turn() === perspective) return true;
+    } catch {
+      // ignore
+    }
+  }
+  const endBalance = relativeMaterial(pos, perspective);
+  return startBalance - endBalance >= thresholdPawns;
+}
+
 interface PlayViewProps {
   // Which setup modes the user can pick between. When only one mode is
   // allowed, SetupPanel hides the Mode selector and locks to it.
@@ -241,6 +285,19 @@ export default function PlayView({
     // until the advantage is actually cashed in.
     const pv = sf.lines[0]?.pv?.trim().split(/\s+/).filter(Boolean) ?? [];
     coachRefutationRef.current = pv.slice(0, 14);
+
+    // Positional-only filter: if the engine's line doesn't end in net material
+    // loss for the student, and the user has opted out of positional coaching,
+    // skip the trigger entirely. Mark the move so we don't re-examine it.
+    const postBadFenForCheck = positions[lastIdx + 1] || positions[0];
+    if (
+      !settings.coachOnPositional &&
+      pv.length > 0 &&
+      !lineEndsInMaterialLoss(postBadFenForCheck, pv, mover)
+    ) {
+      // Already added to coachedIndicesRef above — won't trigger again.
+      return;
+    }
 
     // DO NOT rewind the game state yet. We want the user to see their move
     // finish animating, then the demo plays out the consequences, THEN we
@@ -464,11 +521,32 @@ export default function PlayView({
       return;
     }
 
+    // Positional-only retry: if the engine's PV from the attempt position
+    // doesn't end in material loss AND the user has opted out of positional
+    // coaching, skip the demo and print an honest message. The eval drop is
+    // real but it's "general edge" rather than concrete material.
+    const linesMaterialLoss = lineEndsInMaterialLoss(attemptFen, pvTokens, mover);
+    if (!settings.coachOnPositional && !linesMaterialLoss) {
+      const dropPawns = dropForMover / 100;
+      setRetryRefutationText(
+        bestSan
+          ? `Engine gives no concrete material penalty here — it just prefers ${bestSan} positionally (about ${dropPawns.toFixed(1)} pawns).`
+          : `No clear material refutation — engine prefers a different move positionally.`
+      );
+      setDemoPosition(null);
+      setDemoArrow(null);
+      const remaining = coachAttemptsLeft - 1;
+      setCoachAttemptsLeft(remaining);
+      if (remaining <= 0) setCoachSubPhase('reveal');
+      else setCoachSubPhase('retry-wrong');
+      return;
+    }
+
     // Real refutation incoming — capture the PV (up to 14 half-moves) and
     // let the demo effect play it out.
     retryDemoQueueRef.current = pvTokens.slice(0, 14);
     setCoachSubPhase('retry-demo');
-  }, [coachActive, coachSubPhase, sf.lines, coachAttemptsLeft]);
+  }, [coachActive, coachSubPhase, sf.lines, coachAttemptsLeft, settings]);
 
   // Retry-demo: play through the engine's refutation line until the
   // material/positional advantage is exposed (or we hit the cap), then

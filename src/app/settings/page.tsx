@@ -32,6 +32,7 @@ export default function SettingsPage() {
   const [coachOnBlunder, setCoachOnBlunder] = useState(true);
   const [coachOnMistake, setCoachOnMistake] = useState(true);
   const [coachOnInaccuracy, setCoachOnInaccuracy] = useState(true);
+  const [coachOnPositional, setCoachOnPositional] = useState(false);
 
   useEffect(() => {
     setBoardTheme(localStorage.getItem('boardTheme') || 'brown');
@@ -42,6 +43,7 @@ export default function SettingsPage() {
     setCoachOnBlunder(localStorage.getItem('coachOnBlunder') !== 'false');
     setCoachOnMistake(localStorage.getItem('coachOnMistake') !== 'false');
     setCoachOnInaccuracy(localStorage.getItem('coachOnInaccuracy') !== 'false');
+    setCoachOnPositional(localStorage.getItem('coachOnPositional') === 'true');
   }, []);
 
   function update<T>(key: string, value: T, setter: (v: T) => void) {
@@ -190,6 +192,30 @@ export default function SettingsPage() {
               writeSetting('coachOnInaccuracy', v);
             }}
           />
+        </div>
+
+        <div className="border-t border-[var(--border)] pt-3">
+          <label className="flex items-start gap-3 p-2 rounded hover:bg-[var(--surface-2)]/50 cursor-pointer transition-colors">
+            <input
+              type="checkbox"
+              checked={coachOnPositional}
+              onChange={(e) => {
+                setCoachOnPositional(e.target.checked);
+                writeSetting('coachOnPositional', e.target.checked);
+              }}
+              className="mt-1 w-4 h-4 accent-[var(--accent)] shrink-0"
+            />
+            <div className="flex-1">
+              <div className="text-[var(--foreground-strong)] font-medium">
+                Coach on positional mistakes
+              </div>
+              <div className="text-xs text-[var(--muted)] mt-0.5 leading-relaxed">
+                When the engine prefers another move but no material is won or lost in the resulting line.
+                Off by default — beginners benefit more from focusing on tactical errors that lose pieces.
+                Turn on once you're comfortable spotting hanging pieces and want subtler feedback.
+              </div>
+            </div>
+          </label>
         </div>
       </section>
 
