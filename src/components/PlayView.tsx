@@ -24,6 +24,7 @@ import { cpToWinPercent, classifyMove, moveAccuracy, type NagType, type PlyEval 
 import { identifyOpening } from '@/lib/openings';
 import { buildPgn, todayTag } from '@/lib/pgn';
 import { explainMove, isWinningCapture, type CoachExplanation } from '@/lib/coaching';
+import { readUserRating, writeUserRating, updateRating, mentorOpponentRating } from '@/lib/rating';
 
 const BOARD_WIDTH = 560;
 
@@ -101,12 +102,21 @@ interface PlayViewProps {
   allowedModes?: GameMode[];
   // Optional tab label shown above the setup card (e.g. "Mentor", "Explore")
   tabLabel?: string;
+  // When true, opponent ELO is driven by the user's stored rating instead
+  // of being picked from the slider (Mentor uses this).
+  adaptiveElo?: boolean;
 }
 
 export default function PlayView({
   allowedModes = ['cpu', 'coach', 'free'],
   tabLabel,
+  adaptiveElo = false,
 }: PlayViewProps = {}) {
+  // User's adaptive rating (only meaningful when adaptiveElo === true)
+  const [userRating, setUserRatingState] = useState(1200);
+  useEffect(() => {
+    setUserRatingState(readUserRating());
+  }, []);
   // Game phase — controls the entire lifecycle
   const [gamePhase, setGamePhase] = useState<GamePhase>('setup');
 
@@ -117,6 +127,10 @@ export default function PlayView({
   const [draftMode, setDraftMode] = useState<GameMode>(defaultMode);
   const [draftCpuColor, setDraftCpuColor] = useState<OpponentColor>('black');
   const [draftCpuElo, setDraftCpuElo] = useState(1500);
+  // When adaptiveElo, keep the draft ELO in sync with the user's rating.
+  useEffect(() => {
+    if (adaptiveElo) setDraftCpuElo(mentorOpponentRating(userRating));
+  }, [adaptiveElo, userRating]);
   const [draftTc, setDraftTc] = useState<TimeControl | null>(null);
 
   // Committed game settings (locked after Start)
@@ -176,6 +190,9 @@ export default function PlayView({
   // Retry-demo queue + text (populated when user plays a wrong retry attempt)
   const retryDemoQueueRef = useRef<string[]>([]);
   const retryDemoStartFenRef = useRef<string | null>(null);
+  // UCI of the user's most recent retry attempt — used by retry-good to
+  // commit the move when the engine confirms it's a reasonable choice.
+  const retryAttemptUciRef = useRef<string | null>(null);
   const [retryRefutationText, setRetryRefutationText] = useState<string | null>(null);
 
   const sf = useStockfish();
@@ -339,9 +356,12 @@ export default function PlayView({
     return () => clearTimeout(t);
   }, [coachActive, coachSubPhase, positions]);
 
-  // Demo playback: walk the engine's refutation line until the positional or
-  // material advantage is actually exposed, then dwell and hand off to the
-  // rewind phase. We cap at ~14 half-moves to bound total demo length.
+  // Demo playback: walk the engine's refutation line. Termination logic is
+  // TRADE-AWARE — once the advantage is exposed (material loss for student,
+  // or mate), we keep playing through any in-progress capture sequence and
+  // only stop when the dust has settled (≥ 2 consecutive non-capture plies).
+  // This guarantees the demo never cuts off mid-trade and obscures the actual
+  // material outcome. Hard cap at 16 plies as a safety net.
   useEffect(() => {
     if (!coachActive || coachSubPhase !== 'demo') return;
     const moves = coachRefutationRef.current;
@@ -354,17 +374,16 @@ export default function PlayView({
     const postBadFen = positions[coachBadIndexRef.current + 1] || positions[0];
     let currentPos = postBadFen;
     let idx = 0;
-    // Side that benefits from the refutation = the opposite of who just played the bad move
     const mover = coachMoverRef.current; // the student's color
     const startBalance = relativeMaterial(postBadFen, mover);
     let exposedAtIdx: number | null = null;
-    const MAX_HALF_MOVES = 14;
-    const MIN_HALF_MOVES_AFTER_EXPOSURE = 2; // let the opponent consolidate for a move or two
+    let nonCaptureStreak = 0;
+    const SOFT_CAP = 16;
+    const HARD_CAP = 20;
 
     const playNext = () => {
       if (cancelled) return;
-      if (idx >= moves.length || idx >= MAX_HALF_MOVES) {
-        // Demo done — dwell on the final position so the student can absorb it
+      if (idx >= moves.length || idx >= HARD_CAP) {
         setTimeout(() => {
           if (cancelled) return;
           setDemoArrow(null);
@@ -379,11 +398,10 @@ export default function PlayView({
         return;
       }
 
-      // Arrow color: red for the side refuting (opponent), blue for the student's forced replies
       const arrowColor = idx % 2 === 0 ? '#dc322f' : '#3893e8';
       setDemoArrow({ from: uci.slice(0, 2) as Square, to: uci.slice(2, 4) as Square, color: arrowColor });
 
-      const arrowTimer = setTimeout(() => {
+      setTimeout(() => {
         if (cancelled) return;
         const g = new Chess(currentPos);
         try {
@@ -392,45 +410,44 @@ export default function PlayView({
             to: uci.slice(2, 4),
             promotion: uci.slice(4, 5) || 'q',
           });
-          if (m?.captured) soundRef.current.play('capture');
+          const isCapture = !!m?.captured || (m?.flags?.includes('e') ?? false);
+          if (isCapture) soundRef.current.play('capture');
           else if (g.inCheck()) soundRef.current.play('check');
           else soundRef.current.play('move');
           currentPos = g.fen();
           setDemoPosition(currentPos);
           setDemoArrow(null);
           idx++;
+          if (isCapture) nonCaptureStreak = 0;
+          else nonCaptureStreak++;
 
-          // If the advantage is now "exposed" — material vs the student has
-          // shifted by ≥ 2 pawns relative to the bad-move position, or the
-          // position is mate — mark the moment and keep going a bit longer
-          // so the consolidating move is visible before we rewind.
           const currentBalance = relativeMaterial(currentPos, mover);
-          const delta = startBalance - currentBalance; // positive means student has lost material
+          const delta = startBalance - currentBalance;
           const isTerminal = g.isGameOver();
-          if (exposedAtIdx === null && (delta >= 2 || isTerminal)) {
+          if (exposedAtIdx === null && (delta >= 1 || isTerminal)) {
             exposedAtIdx = idx - 1;
           }
 
-          const reachedExposureFollowup =
-            exposedAtIdx !== null && idx >= exposedAtIdx + 1 + MIN_HALF_MOVES_AFTER_EXPOSURE;
+          // Trade-aware stop: once exposed AND the trade has settled (2 quiet
+          // plies in a row) → stop. Otherwise hard-cap at SOFT_CAP if the
+          // last move was non-capture, HARD_CAP unconditionally.
+          const tradeSettled = exposedAtIdx !== null && nonCaptureStreak >= 2;
+          const softLimit = idx >= SOFT_CAP && !isCapture;
 
-          if (isTerminal || reachedExposureFollowup) {
-            // Dwell, then hand off to rewind
+          if (isTerminal || tradeSettled || softLimit) {
             setTimeout(() => {
               if (cancelled) return;
               setDemoArrow(null);
               setCoachSubPhase('rewinding');
-            }, 1400);
+            }, 1300);
             return;
           }
 
-          setTimeout(playNext, 850);
+          setTimeout(playNext, 800);
         } catch {
           setCoachSubPhase('rewinding');
         }
-      }, 800);
-
-      void arrowTimer;
+      }, 750);
     };
 
     const kick = setTimeout(playNext, 300);
@@ -502,43 +519,49 @@ export default function PlayView({
       }
     }
 
+    // Helper to convert "user's attempt is fine, just not engine's #1" into
+    // a retry-good celebration: applies the user's move, no decrement.
+    const acceptAsGood = (text: string) => {
+      setRetryRefutationText(text);
+      setDemoPosition(null);
+      setDemoArrow(null);
+      // Apply the user's actual attempt to game state
+      const u = retryAttemptUciRef.current;
+      if (u) {
+        try {
+          applyMove(u.slice(0, 2), u.slice(2, 4), u.slice(4, 5) || 'q');
+        } catch {
+          // ignore
+        }
+      }
+      setCoachSubPhase('retry-good');
+    };
+
     // If the eval barely budged, this is an honest "fine but not best" call —
-    // skip the demo and just say so.
+    // celebrate the move and don't decrement attempts.
     const SMALL_DROP_CP = 50;
     if (dropForMover < SMALL_DROP_CP) {
       const dropPawns = Math.max(0, dropForMover) / 100;
-      setRetryRefutationText(
+      acceptAsGood(
         bestSan
-          ? `That's a reasonable move — the engine just slightly prefers ${bestSan} (about ${dropPawns.toFixed(1)} pawns better).`
-          : `That's a reasonable move — engine prefers a different square.`
+          ? `Reasonable move — the engine just slightly prefers ${bestSan} (about ${dropPawns.toFixed(1)} pawns better).`
+          : `Reasonable move — engine prefers a different square.`
       );
-      setDemoPosition(null);
-      setDemoArrow(null);
-      const remaining = coachAttemptsLeft - 1;
-      setCoachAttemptsLeft(remaining);
-      if (remaining <= 0) setCoachSubPhase('reveal');
-      else setCoachSubPhase('retry-wrong');
       return;
     }
 
     // Positional-only retry: if the engine's PV from the attempt position
     // doesn't end in material loss AND the user has opted out of positional
-    // coaching, skip the demo and print an honest message. The eval drop is
-    // real but it's "general edge" rather than concrete material.
+    // coaching, treat it as a "good move" too — there's no concrete material
+    // penalty, the engine just has a slight positional preference.
     const linesMaterialLoss = lineEndsInMaterialLoss(attemptFen, pvTokens, mover);
     if (!settings.coachOnPositional && !linesMaterialLoss) {
       const dropPawns = dropForMover / 100;
-      setRetryRefutationText(
+      acceptAsGood(
         bestSan
           ? `Engine gives no concrete material penalty here — it just prefers ${bestSan} positionally (about ${dropPawns.toFixed(1)} pawns).`
           : `No clear material refutation — engine prefers a different move positionally.`
       );
-      setDemoPosition(null);
-      setDemoArrow(null);
-      const remaining = coachAttemptsLeft - 1;
-      setCoachAttemptsLeft(remaining);
-      if (remaining <= 0) setCoachSubPhase('reveal');
-      else setCoachSubPhase('retry-wrong');
       return;
     }
 
@@ -570,15 +593,15 @@ export default function PlayView({
     const startBalance = relativeMaterial(startFen, mover);
     let exposedAtIdx: number | null = null;
     let observedMate = false;
-    const MAX_HALF_MOVES = 12;
-    const MIN_AFTER_EXPOSURE = 1;
+    let nonCaptureStreak = 0;
+    const SOFT_CAP = 14;
+    const HARD_CAP = 18;
 
     const finishDemo = () => {
       if (cancelled) return;
       setDemoPosition(null);
       setDemoArrow(null);
 
-      // Build a description of what the user just watched
       const finalBalance = relativeMaterial(pos, mover);
       const delta = startBalance - finalBalance;
       let text: string;
@@ -587,7 +610,7 @@ export default function PlayView({
       } else if (delta >= 2) {
         text = `That line costs you about ${delta.toFixed(0)} pawns of material.`;
       } else if (delta >= 1) {
-        text = `That line drops about ${delta.toFixed(0)} pawn worth of material or position.`;
+        text = `That line drops about ${delta.toFixed(0)} pawn worth of material.`;
       } else {
         text = `Engine plays out that line and your position holds up — but it's not the strongest reply available.`;
       }
@@ -601,7 +624,7 @@ export default function PlayView({
 
     const playNext = () => {
       if (cancelled) return;
-      if (idx >= queue.length || idx >= MAX_HALF_MOVES) {
+      if (idx >= queue.length || idx >= HARD_CAP) {
         setTimeout(finishDemo, 1200);
         return;
       }
@@ -628,31 +651,36 @@ export default function PlayView({
             to: uci.slice(2, 4),
             promotion: uci.slice(4, 5) || 'q',
           });
-          if (m?.captured) soundRef.current.play('capture');
+          const isCapture = !!m?.captured || (m?.flags?.includes('e') ?? false);
+          if (isCapture) soundRef.current.play('capture');
           else if (g.inCheck()) soundRef.current.play('check');
           else soundRef.current.play('move');
           pos = g.fen();
           setDemoPosition(pos);
           setDemoArrow(null);
           idx++;
+          if (isCapture) nonCaptureStreak = 0;
+          else nonCaptureStreak++;
 
           const balance = relativeMaterial(pos, mover);
           const delta = startBalance - balance;
           const isTerminal = g.isGameOver();
           if (isTerminal && g.isCheckmate()) observedMate = true;
 
-          if (exposedAtIdx === null && (delta >= 2 || isTerminal)) {
+          if (exposedAtIdx === null && (delta >= 1 || isTerminal)) {
             exposedAtIdx = idx - 1;
           }
-          const reachedFollowup =
-            exposedAtIdx !== null && idx >= exposedAtIdx + 1 + MIN_AFTER_EXPOSURE;
 
-          if (isTerminal || reachedFollowup) {
+          // Trade-aware termination: stop only when the exchange has settled.
+          const tradeSettled = exposedAtIdx !== null && nonCaptureStreak >= 2;
+          const softLimit = idx >= SOFT_CAP && !isCapture;
+
+          if (isTerminal || tradeSettled || softLimit) {
             setTimeout(finishDemo, 1300);
             return;
           }
 
-          setTimeout(playNext, 850);
+          setTimeout(playNext, 800);
         } catch {
           finishDemo();
         }
@@ -1038,6 +1066,7 @@ export default function PlayView({
         setCoachLastAttemptSan(tried.san);
         retryDemoStartFenRef.current = attemptFen;
         retryDemoQueueRef.current = [];
+        retryAttemptUciRef.current = triedUci;
         setRetryRefutationText(null);
         setDemoPosition(attemptFen);
         setCoachSubPhase('retry-analyzing');
@@ -1071,6 +1100,33 @@ export default function PlayView({
     setGameResult(result);
     setGamePhase('ended');
   }, [gamePhase, game, gameResult, moveHistory.length, clock]);
+
+  // Adaptive rating update — fires once whenever a Mentor (adaptive) game
+  // ends. Translates the result into 1/0.5/0 from the human's perspective
+  // and applies a standard ELO update against the opponent we just played.
+  const ratingUpdatedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!adaptiveElo) return;
+    if (!gameResult) return;
+    if (committedMode !== 'coach' && committedMode !== 'cpu') return;
+    if (!computerPlays) return;
+    // Stamp by something deterministic so we only update once per finished game
+    const stamp = `${moveHistory.length}|${gameResult.type}|${'winner' in gameResult ? gameResult.winner : 'd'}`;
+    if (ratingUpdatedForRef.current === stamp) return;
+    ratingUpdatedForRef.current = stamp;
+
+    const humanColor: 'w' | 'b' = computerPlays === 'w' ? 'b' : 'w';
+    let actual: 0 | 0.5 | 1;
+    if ('winner' in gameResult) {
+      actual = gameResult.winner === humanColor ? 1 : 0;
+    } else {
+      actual = 0.5;
+    }
+    const opponentRating = sf.elo;
+    const newRating = updateRating(userRating, opponentRating, actual);
+    setUserRatingState(newRating);
+    writeUserRating(newRating);
+  }, [adaptiveElo, gameResult, committedMode, computerPlays, sf.elo, userRating, moveHistory.length]);
 
   const goToMove = useCallback(
     (index: number) => {
@@ -1271,6 +1327,7 @@ export default function PlayView({
     coachBadIndexRef.current = -1;
     retryDemoQueueRef.current = [];
     retryDemoStartFenRef.current = null;
+    retryAttemptUciRef.current = null;
     // Resume the clock so the CPU's turn can run out normally
     clockRef.current.resume();
   }, []);
@@ -1580,6 +1637,8 @@ export default function PlayView({
               onStart={startGame}
               allowedModes={allowedModes}
               tabLabel={tabLabel}
+              adaptiveElo={adaptiveElo}
+              userRating={userRating}
             />
           ) : (
             <>
@@ -1611,6 +1670,8 @@ export default function PlayView({
                   !coachActive
                 }
                 phase={gamePhase}
+                adaptiveElo={adaptiveElo}
+                userRating={userRating}
               />
               <EngineAnalysis
                 lines={sf.lines}

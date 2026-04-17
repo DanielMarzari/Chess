@@ -14,6 +14,8 @@ interface GameStatusPanelProps {
   onResign: () => void;
   canResign: boolean;
   phase: 'playing' | 'ended';
+  adaptiveElo?: boolean; // true in Mentor — show "Adaptive" label
+  userRating?: number; // your current rating, shown alongside opponent in adaptive mode
 }
 
 export default function GameStatusPanel({
@@ -26,6 +28,8 @@ export default function GameStatusPanel({
   onResign,
   canResign,
   phase,
+  adaptiveElo = false,
+  userRating,
 }: GameStatusPanelProps) {
   return (
     <div className="bg-[var(--surface)] rounded border border-[var(--border)] overflow-hidden">
@@ -50,6 +54,15 @@ export default function GameStatusPanel({
             <span className="text-[var(--muted)]">Opponent</span>
             <span className="text-[var(--foreground-strong)] font-mono">
               CPU {cpuElo} · {cpuColor === 'w' ? 'White' : 'Black'}
+            </span>
+          </div>
+        )}
+        {mode === 'coach' && adaptiveElo && (
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-[var(--muted)]">Strength</span>
+            <span className="font-mono text-[var(--accent)]">
+              Adaptive · {cpuElo}
+              {userRating ? <span className="text-[var(--muted)] ml-1">(you: {userRating})</span> : null}
             </span>
           </div>
         )}

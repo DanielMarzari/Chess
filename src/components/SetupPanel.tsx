@@ -29,6 +29,11 @@ interface SetupPanelProps {
   onStart: () => void;
   allowedModes?: GameMode[];
   tabLabel?: string;
+  // When true, the ELO slider/presets are hidden in favor of an adaptive
+  // indicator (used by Mentor — opponent strength comes from your rating).
+  adaptiveElo?: boolean;
+  // The user's current rating, shown in the adaptive indicator.
+  userRating?: number;
 }
 
 export default function SetupPanel({
@@ -43,6 +48,8 @@ export default function SetupPanel({
   onStart,
   allowedModes = ['cpu', 'coach', 'free'],
   tabLabel,
+  adaptiveElo = false,
+  userRating,
 }: SetupPanelProps) {
   const showModeSelector = allowedModes.length > 1;
   const tcGroups = [
@@ -150,39 +157,57 @@ export default function SetupPanel({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
-                Strength
-              </label>
-              <span className="font-mono text-sm text-[var(--foreground-strong)]">{cpuElo} ELO</span>
+          {adaptiveElo ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
+                  Strength
+                </label>
+                <span className="font-mono text-sm text-[var(--accent)]">
+                  Adaptive · ~{cpuElo}
+                </span>
+              </div>
+              <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
+                Computer plays at your level{userRating ? ` (you: ${userRating} ELO)` : ''}. After
+                each game, your rating updates and the next opponent adjusts. Want a custom strength
+                instead? Use Explore.
+              </p>
             </div>
-            <input
-              type="range"
-              min={800}
-              max={3000}
-              step={50}
-              value={cpuElo}
-              onChange={(e) => onCpuEloChange(parseInt(e.target.value))}
-              className="w-full"
-            />
-            <div className="grid grid-cols-4 gap-1">
-              {ELO_PRESETS.map((p) => (
-                <button
-                  key={p.label}
-                  onClick={() => onCpuEloChange(p.elo)}
-                  title={`${p.elo} ELO`}
-                  className={`py-1 text-[11px] rounded transition-colors ${
-                    Math.abs(cpuElo - p.elo) < 50
-                      ? 'bg-[var(--accent)]/20 text-[var(--accent)] border border-[var(--accent)]'
-                      : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)] border border-transparent'
-                  } ${p.title ? 'font-mono font-semibold' : ''}`}
-                >
-                  {p.label}
-                </button>
-              ))}
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] uppercase tracking-wider text-[var(--muted)] font-semibold">
+                  Strength
+                </label>
+                <span className="font-mono text-sm text-[var(--foreground-strong)]">{cpuElo} ELO</span>
+              </div>
+              <input
+                type="range"
+                min={800}
+                max={3000}
+                step={50}
+                value={cpuElo}
+                onChange={(e) => onCpuEloChange(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <div className="grid grid-cols-4 gap-1">
+                {ELO_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    onClick={() => onCpuEloChange(p.elo)}
+                    title={`${p.elo} ELO`}
+                    className={`py-1 text-[11px] rounded transition-colors ${
+                      Math.abs(cpuElo - p.elo) < 50
+                        ? 'bg-[var(--accent)]/20 text-[var(--accent)] border border-[var(--accent)]'
+                        : 'bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--foreground-strong)] border border-transparent'
+                    } ${p.title ? 'font-mono font-semibold' : ''}`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 

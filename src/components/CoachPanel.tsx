@@ -14,7 +14,8 @@ export type CoachSubPhase =
   | 'retry-analyzing' // engine is analyzing the student's retry attempt to find its refutation
   | 'retry-demo' // user just tried a wrong move; playing out engine's refutation of it
   | 'retry-wrong' // just tried but it wasn't right (after retry-demo completes)
-  | 'retry-correct' // just tried and it was a good move
+  | 'retry-correct' // just tried and it was the engine's exact #1
+  | 'retry-good' // not THE best, but reasonable enough — apply + celebrate, show what was best
   | 'reveal' // out of tries or gave up — here's the answer
   | 'done'; // finished, waiting for continue
 
@@ -168,12 +169,43 @@ export default function CoachPanel({
             <div className="flex items-center gap-2 text-sm text-[var(--success)] bg-[var(--success)]/10 rounded px-2 py-1.5">
               <CheckCircle size={14} />
               <span>
-                <span className="font-mono font-bold">{lastAttemptSan}</span> is a good move!
+                <span className="font-mono font-bold">{lastAttemptSan}</span> — best move!
               </span>
             </div>
             <div className="text-[13px] leading-relaxed text-[var(--foreground)] border-l-2 border-[var(--accent)] pl-3">
               {explanation.whyBest}
             </div>
+            <button
+              onClick={onContinue}
+              className="w-full py-2 rounded text-sm flex items-center justify-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-semibold transition-colors"
+            >
+              Continue Game <ArrowRight size={14} />
+            </button>
+          </>
+        )}
+
+        {subPhase === 'retry-good' && (
+          <>
+            <div className="flex items-center gap-2 text-sm text-[var(--success)] bg-[var(--success)]/10 rounded px-2 py-1.5">
+              <CheckCircle size={14} />
+              <span>
+                <span className="font-mono font-bold">{lastAttemptSan}</span> — good move!
+              </span>
+            </div>
+            {retryRefutationText && (
+              <div className="text-[13px] leading-relaxed text-[var(--foreground)] border-l-2 border-[var(--accent)]/50 pl-3">
+                {retryRefutationText}
+              </div>
+            )}
+            {explanation?.hintBestMove && (
+              <div className="text-xs text-[var(--muted)]">
+                Engine's pick was{' '}
+                <span className="font-mono font-bold text-[var(--accent)]">
+                  {explanation.hintBestMove}
+                </span>
+                .
+              </div>
+            )}
             <button
               onClick={onContinue}
               className="w-full py-2 rounded text-sm flex items-center justify-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-semibold transition-colors"
