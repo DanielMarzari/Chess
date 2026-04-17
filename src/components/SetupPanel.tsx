@@ -168,9 +168,9 @@ export default function SetupPanel({
                 </span>
               </div>
               <p className="text-[11px] text-[var(--muted)] leading-relaxed bg-[var(--surface-2)] rounded p-2">
-                Computer plays at your level{userRating ? ` (you: ${userRating} ELO)` : ''}. After
-                each game, your rating updates and the next opponent adjusts. Want a custom strength
-                instead? Use Explore.
+                Computer plays just below your level{userRating ? ` (you: ${userRating} ELO)` : ''} so you can
+                practice tactics and build wins — the coach still teaches on your mistakes. Your
+                rating adjusts after each game. Want a fixed strength instead? Use Explore.
               </p>
             </div>
           ) : (

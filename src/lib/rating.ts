@@ -50,15 +50,19 @@ export function updateRating(
 }
 
 /**
- * The opponent's rating in Mentor mode: slightly above the user so games
- * stretch them without crushing morale. Smaller offset at high ratings,
- * larger at low ones (beginners benefit from a slightly stiffer challenge
- * because the engine is so weak at sub-1000 ELO that they need the push).
+ * Mentor's opponent plays SLIGHTLY BELOW the user's current rating so wins
+ * are within reach. The coach still teaches on mistakes, but the game itself
+ * should end with the student on top more often than not — the brain reinforces
+ * tactical patterns much more strongly when the learning session ends in a
+ * successful outcome. Bigger negative offset for beginners where morale is
+ * fragile; smaller at higher ratings where the gap per point is larger anyway.
  */
 export function mentorOpponentRating(userRating: number): number {
   let offset: number;
-  if (userRating < 1000) offset = 100;
-  else if (userRating < 1600) offset = 75;
-  else offset = 50;
+  if (userRating < 1000) offset = -150;
+  else if (userRating < 1400) offset = -100;
+  else if (userRating < 1800) offset = -75;
+  else if (userRating < 2200) offset = -50;
+  else offset = -25;
   return Math.max(MIN_RATING, Math.min(MAX_RATING, Math.round(userRating + offset)));
 }

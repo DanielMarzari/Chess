@@ -1118,6 +1118,19 @@ export default function PlayView({
         setContestUserSan(tried.san);
         setDemoPosition(postUserFen);
         setDemoArrow(null);
+        // Start recording a new demo line for this contest layer — begins
+        // with the user's own branched move so they can later contest it
+        // too if they go another layer deep.
+        demoMoveLogRef.current = [
+          {
+            uci: triedUci,
+            san: tried.san,
+            fenBefore: startFen,
+            fenAfter: postUserFen,
+            mover: tried.color,
+            ply: 0,
+          },
+        ];
         // Engine analyzes at full strength — this preempts whatever sf was
         // doing. analyze() doesn't apply ELO limits.
         sf.analyze(postUserFen);
@@ -1565,13 +1578,12 @@ export default function PlayView({
   );
 
   const onContestExit = useCallback(() => {
-    // Restore the lesson view: clear the contest position override, bump the
-    // contest cycle counter (so colors advance for the next contest), and
+    // Restore the lesson view: clear the contest position override and
     // return to whichever retry sub-phase the user came from.
+    // Depth was already bumped in finish() — don't double-increment here.
     setDemoPosition(null);
     setDemoArrow(null);
     setCoachSubPhase(contestReturnSubPhaseRef.current);
-    setContestCycle((c) => Math.min(3, c + 1));
   }, []);
 
   // Cancel a contest before the user has played anything — no cycle spent.
@@ -1668,6 +1680,11 @@ export default function PlayView({
       }
       setContestEngineSan(firstResponseSan);
       setContestResultText(resultText);
+      // Refutation stacking: publish the contest's line (user's move +
+      // engine's response moves) as the new demoMoveLog, and bump the depth
+      // so the user can drill deeper into THIS variation next. Cap at 3.
+      setDemoMoveLog([...demoMoveLogRef.current]);
+      setContestCycle((c) => Math.min(3, c + 1));
       setCoachSubPhase('contest-result');
     };
 
@@ -1703,10 +1720,24 @@ export default function PlayView({
           if (isCapture) soundRef.current.play('capture');
           else if (g.inCheck()) soundRef.current.play('check');
           else soundRef.current.play('move');
+          const fenBefore = pos;
           pos = g.fen();
           setDemoPosition(pos);
           setDemoArrow(null);
           if (m && idx === 0) firstResponseSan = m.san;
+          // Record the engine's response move into the demo log so after the
+          // contest resolves the user can click any of these moves to go a
+          // further layer deeper.
+          if (m) {
+            demoMoveLogRef.current.push({
+              uci,
+              san: m.san,
+              fenBefore,
+              fenAfter: pos,
+              mover: m.color,
+              ply: demoMoveLogRef.current.length, // sequential in the layer's line
+            });
+          }
           idx++;
           if (isCapture) nonCaptureStreak = 0;
           else nonCaptureStreak++;

@@ -335,14 +335,20 @@ export default function CoachPanel({
           <div
             className="rounded p-2 space-y-1.5 border"
             style={{
-              borderColor: CONTEST_COLORS[contestCycle % 3].border,
-              background: CONTEST_COLORS[contestCycle % 3].bg,
+              // By the time we're in 'contest-result', contestCycle has already
+              // been bumped by finish(), so the current layer index is
+              // contestCycle - 1 in the 0-indexed color palette.
+              borderColor: CONTEST_COLORS[Math.max(0, contestCycle - 1) % 3].border,
+              background: CONTEST_COLORS[Math.max(0, contestCycle - 1) % 3].bg,
             }}
           >
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
-              <GitBranch size={12} style={{ color: CONTEST_COLORS[contestCycle % 3].text }} />
-              <span style={{ color: CONTEST_COLORS[contestCycle % 3].text }}>
-                Variation #{contestCycle + 1}
+              <GitBranch
+                size={12}
+                style={{ color: CONTEST_COLORS[Math.max(0, contestCycle - 1) % 3].text }}
+              />
+              <span style={{ color: CONTEST_COLORS[Math.max(0, contestCycle - 1) % 3].text }}>
+                Layer {contestCycle}/3 · result
               </span>
             </div>
             <div className="text-[13px] leading-relaxed text-[var(--foreground)]">
@@ -373,46 +379,76 @@ export default function CoachPanel({
         )}
       </div>
 
-      {/* Demo history — shown after a demo plays so the user can branch in */}
+      {/* Demo history — shown after a demo plays so the user can branch in.
+          Layer depth (contestCycle) semantics: 0 = original refutation,
+          1-3 = successive contests. Move buttons get tinted with the
+          current layer's color so the nesting is visually obvious. */}
       {showDemoHistory && (
-        <div className="border-t border-[var(--border)] p-3 space-y-1.5">
+        <div
+          className="border-t border-[var(--border)] p-3 space-y-1.5"
+          style={
+            contestCycle > 0
+              ? { background: CONTEST_COLORS[(contestCycle - 1) % 3].bg }
+              : undefined
+          }
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--muted)] flex items-center gap-1">
-              <GitBranch size={10} /> Demo line — click to contest
+            <span
+              className="text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1"
+              style={{
+                color:
+                  contestCycle > 0
+                    ? CONTEST_COLORS[(contestCycle - 1) % 3].text
+                    : 'var(--muted)',
+              }}
+            >
+              <GitBranch size={10} />
+              {contestCycle === 0
+                ? 'Demo line — click to contest'
+                : `Variation line · Layer ${contestCycle}/3`}
             </span>
-            {contestCycle > 0 && (
-              <span className="text-[9px] text-[var(--muted)]">
-                {contestCycle}/3 contested
-              </span>
-            )}
           </div>
           <div
             className="flex flex-wrap gap-1 text-xs font-mono"
             onMouseLeave={() => onHoverDemoMove(null)}
           >
-            {demoMoveLog.map((m, i) => (
-              <button
-                key={i}
-                onClick={() => onContestMove(i)}
-                onMouseEnter={() => onHoverDemoMove(i)}
-                onFocus={() => onHoverDemoMove(i)}
-                onBlur={() => onHoverDemoMove(null)}
-                disabled={contestCycle >= 3}
-                className={`px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                  m.mover === 'w'
-                    ? 'bg-[var(--surface-2)] border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
-                    : 'bg-[var(--background)]/40 border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
-                }`}
-                title={`Hover to preview, click to contest`}
-              >
-                {m.mover === 'w' ? `${Math.floor(m.ply / 2) + 1}.` : ''}
-                {m.san}
-              </button>
-            ))}
+            {demoMoveLog.map((m, i) => {
+              const layerColor =
+                contestCycle > 0 ? CONTEST_COLORS[(contestCycle - 1) % 3] : null;
+              const baseStyle = layerColor
+                ? {
+                    background: layerColor.bg,
+                    borderColor: layerColor.border,
+                    color: layerColor.text,
+                  }
+                : undefined;
+              return (
+                <button
+                  key={i}
+                  onClick={() => onContestMove(i)}
+                  onMouseEnter={() => onHoverDemoMove(i)}
+                  onFocus={() => onHoverDemoMove(i)}
+                  onBlur={() => onHoverDemoMove(null)}
+                  disabled={contestCycle >= 3}
+                  style={baseStyle}
+                  className={`px-1.5 py-0.5 rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    layerColor
+                      ? 'hover:brightness-125'
+                      : m.mover === 'w'
+                        ? 'bg-[var(--surface-2)] border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
+                        : 'bg-[var(--background)]/40 border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface)] hover:border-[var(--accent)]'
+                  }`}
+                  title={`Hover to preview, click to contest`}
+                >
+                  {m.mover === 'w' ? `${Math.floor(m.ply / 2) + 1}.` : ''}
+                  {m.san}
+                </button>
+              );
+            })}
           </div>
           {contestCycle >= 3 && (
             <p className="text-[10px] text-[var(--muted)]">
-              Contest limit reached for this position. Continue to keep going.
+              Maximum depth reached. Continue the lesson when you're ready.
             </p>
           )}
         </div>
@@ -482,7 +518,7 @@ function ContestPanelBody({
     <div className="rounded p-2 space-y-1 border" style={{ borderColor: c.border, background: c.bg }}>
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
         <GitBranch size={12} style={{ color: c.text }} />
-        <span style={{ color: c.text }}>Variation #{cycle + 1}</span>
+        <span style={{ color: c.text }}>Layer {cycle + 1}/3</span>
         {pulsing && (
           <span
             className="ml-auto inline-block w-1.5 h-1.5 rounded-full animate-pulse"
