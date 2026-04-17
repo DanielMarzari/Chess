@@ -67,11 +67,41 @@ export default function GameEndModal({
 
   const { w: whiteNags, b: blackNags } = countNagsByColor(nags);
 
+  // Learning-oriented row layout: positive moves first so the user sees
+  // what went well before what to work on.
   const nagRows: { type: NagType; label: string }[] = [
-    { type: 'blunder', label: 'Blunders' },
-    { type: 'mistake', label: 'Mistakes' },
-    { type: 'inaccuracy', label: 'Inaccuracies' },
+    { type: 'brilliant', label: 'Brilliant' },
+    { type: 'great', label: 'Great' },
+    { type: 'best', label: 'Best' },
+    { type: 'good', label: 'Good' },
+    { type: 'inaccuracy', label: 'Slips' },
+    { type: 'mistake', label: 'Worth a look' },
+    { type: 'blunder', label: 'Teaching moments' },
   ];
+
+  // One-line positive framing based on the human's stats. Always biased
+  // toward encouragement: highlight strong moves first and frame misses
+  // as learning opportunities.
+  const youNags = humanColor === 'w' ? whiteNags : humanColor === 'b' ? blackNags : null;
+  let encouragement: string | null = null;
+  if (youNags) {
+    const strong =
+      (youNags.brilliant || 0) + (youNags.great || 0) + (youNags.best || 0);
+    const misses = (youNags.blunder || 0) + (youNags.mistake || 0);
+    if (youNags.brilliant) {
+      encouragement = `You found ${youNags.brilliant} brilliant move${
+        youNags.brilliant === 1 ? '' : 's'
+      } — that takes real insight.`;
+    } else if (strong >= 5) {
+      encouragement = `${strong} strong moves this game — your calculation is sharpening.`;
+    } else if (strong > 0 && misses === 0) {
+      encouragement = `Clean game — ${strong} strong move${strong === 1 ? '' : 's'} and no major slips.`;
+    } else if (misses > 0) {
+      encouragement = `Every teaching moment is a step forward. Review them below and try again.`;
+    } else if (strong > 0) {
+      encouragement = `Solid work — you found ${strong} strong move${strong === 1 ? '' : 's'} today.`;
+    }
+  }
 
   return (
     <div
@@ -96,6 +126,9 @@ export default function GameEndModal({
           </div>
           <h2 className={`text-2xl font-bold ${titleColor}`}>{title}</h2>
           <p className="text-sm text-[var(--muted)]">{subtitle}</p>
+          {encouragement && (
+            <p className="text-xs text-[var(--accent)] pt-1">{encouragement}</p>
+          )}
         </div>
 
         {(whiteAccuracy !== null || blackAccuracy !== null) && (
@@ -181,7 +214,9 @@ function getTitle(result: GameResult, humanColor: 'w' | 'b' | null): string {
   if (result.type === 'draw' || result.type === 'stalemate') return 'Draw';
   if (!('winner' in result)) return 'Draw';
   if (humanColor && result.winner === humanColor) return 'You Won!';
-  if (humanColor && result.winner !== humanColor) return 'You Lost';
+  // Softer framing than "You Lost" — the coach's whole premise is that a
+  // loss is a learning opportunity, not a verdict.
+  if (humanColor && result.winner !== humanColor) return 'Good game';
   return result.winner === 'w' ? 'White Wins' : 'Black Wins';
 }
 

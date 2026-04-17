@@ -12,7 +12,7 @@ import SetupPanel, { type GameMode } from '@/components/SetupPanel';
 import GameStatusPanel from '@/components/GameStatusPanel';
 import LiveStats from '@/components/LiveStats';
 import CoachPanel, { type CoachSubPhase, type DemoMove } from '@/components/CoachPanel';
-import PgnImport from '@/components/PgnImport';
+import PgnImport, { type ImportPerspective } from '@/components/PgnImport';
 import { ClockDisplay } from '@/components/Clock';
 import GameEndModal, { type GameResult } from '@/components/GameEndModal';
 import AnnotationEditor from '@/components/AnnotationEditor';
@@ -993,24 +993,52 @@ export default function PlayView({
     void postBadFen;
   }, [coachActive, coachSubPhase, sf.lines, coachBadMoveSan, nags]);
 
-  // Capture live eval into moveEvals
+  // Capture live eval into moveEvals. We also stash the engine's top UCI for
+  // this position so the NAG pass downstream can tell whether the NEXT ply
+  // matched the engine's preferred move.
   useEffect(() => {
     const atLive = currentMoveIndex === moveHistory.length - 1;
     if (!atLive || sf.lines.length === 0 || currentMoveIndex < 0) return;
     const primary = sf.lines[0];
     if (primary.depth < 10) return;
+    const pvFirst = primary.pv.trim().split(/\s+/)[0] || undefined;
     setMoveEvals((prev) => {
       const next = [...prev];
       while (next.length < moveHistory.length) next.push(null);
-      next[currentMoveIndex] = { score: primary.score, mate: primary.mate, depth: primary.depth };
+      next[currentMoveIndex] = {
+        score: primary.score,
+        mate: primary.mate,
+        depth: primary.depth,
+        bestUci: pvFirst,
+      };
       return next;
     });
   }, [sf.lines, currentMoveIndex, moveHistory.length]);
 
-  // NAGs
+  // NAGs — now context-aware so we can distinguish best / great / good from
+  // just "small cp loss". We replay the game through chess.js to recover each
+  // move's UCI + capture/check flags, then compare against moveEvals[i-1]'s
+  // engine-top-UCI to decide whether the move matched the engine's pick.
   useEffect(() => {
     const newNags: (NagType | null)[] = [];
+    const replay = new Chess();
     for (let i = 0; i < moveHistory.length; i++) {
+      let moveUci = '';
+      let isCapture = false;
+      let isCheck = false;
+      try {
+        const m = replay.move(moveHistory[i]);
+        if (m) {
+          moveUci = `${m.from}${m.to}${m.promotion || ''}`;
+          isCapture = !!m.captured || m.flags.includes('e');
+        }
+        if (replay.inCheck()) isCheck = true;
+      } catch {
+        // malformed move — leave flags at defaults
+      }
+      const bestUci = i === 0 ? undefined : moveEvals[i - 1]?.bestUci;
+      const isBest = !!(bestUci && moveUci && bestUci === moveUci);
+
       const before = i === 0 ? 0 : moveEvals[i - 1]?.score ?? null;
       const after = moveEvals[i]?.score ?? null;
       if (before === null || after === null) {
@@ -1022,10 +1050,34 @@ export default function PlayView({
       const afterWhite = cpToWinPercent(after, moveEvals[i]?.mate ?? null);
       const winLoss = mover === 'w' ? beforeWhite - afterWhite : afterWhite - beforeWhite;
       const cpLoss = Math.max(0, winLoss * 10);
-      newNags.push(classifyMove(cpLoss));
+      newNags.push(classifyMove(cpLoss, { isBest, isCapture, isCheck }));
     }
     setNags(newNags);
-  }, [moveEvals, moveHistory.length]);
+  }, [moveEvals, moveHistory]);
+
+  // Positive-reinforcement toast: when the NAG for the user's latest move
+  // lands on best/great/brilliant, flash a small encouragement. Fires at
+  // most once per ply — we remember which ply we've already encouraged.
+  const encouragedPlyRef = useRef<number>(-1);
+  useEffect(() => {
+    if (moveHistory.length === 0) return;
+    const lastIdx = moveHistory.length - 1;
+    if (encouragedPlyRef.current === lastIdx) return;
+    const mover: 'w' | 'b' = lastIdx % 2 === 0 ? 'w' : 'b';
+    // Only cheer the human's moves, not the CPU's.
+    if (computerPlays && mover === computerPlays) return;
+    const nag = nags[lastIdx];
+    if (nag === 'brilliant') {
+      encouragedPlyRef.current = lastIdx;
+      showToast('Brilliant !! 🎉');
+    } else if (nag === 'great') {
+      encouragedPlyRef.current = lastIdx;
+      showToast('Great move !');
+    } else if (nag === 'best') {
+      encouragedPlyRef.current = lastIdx;
+      showToast('Best move ★');
+    }
+  }, [nags, moveHistory.length, computerPlays, showToast]);
 
   // Accuracy
   const { whiteAcc, blackAcc } = useMemo(() => {
@@ -1499,7 +1551,7 @@ export default function PlayView({
   }, [moveHistory, positions, sf, gamePhase, committedMode]);
 
   const importPgn = useCallback(
-    (pgn: string) => {
+    (pgn: string, perspective: ImportPerspective = 'viewer') => {
       const g = new Chess();
       try {
         g.loadPgn(pgn);
@@ -1518,15 +1570,25 @@ export default function PlayView({
         }
         all.push(replay.fen());
       }
-      // Imported games are analysis-only (free play mode, no timer, no CPU).
+      // Imported games are analysis-only: no clock, no CPU to move. But if
+      // the user picked a side, we record computerPlays as the OPPOSITE
+      // color so the NAG pipeline + coach triggers + encouragement toasts
+      // correctly attribute their moves. Mode stays 'free' so the coach
+      // doesn't try to interrupt live (there's no live play — the game is
+      // already fully populated).
       if (sf.opponentEnabled) sf.toggleOpponent();
       clock.disable();
-      setComputerPlays(null);
+      if (perspective === 'w') setComputerPlays('b');
+      else if (perspective === 'b') setComputerPlays('w');
+      else setComputerPlays(null);
       setCommittedMode('free');
       setGame(new Chess(all[all.length - 1]));
       setMoveHistory(history.slice(0, all.length - 1));
       setPositions(all);
-      setCurrentMoveIndex(all.length - 2);
+      // Start the user at the BEGINNING of the game so they can step
+      // through and see their moves get classified as the engine works.
+      // If they don't want a walk-through, they can hit End.
+      setCurrentMoveIndex(perspective === 'viewer' ? all.length - 2 : -1);
       setMoveEvals(Array(all.length - 1).fill(null));
       setNags(Array(all.length - 1).fill(null));
       setGameResult(null);
@@ -1536,6 +1598,10 @@ export default function PlayView({
       autoSavedKeyRef.current = null;
       coachingMomentsCountRef.current = 0;
       gameStartRatingRef.current = userRating;
+      if (perspective !== 'viewer') {
+        const side = perspective === 'w' ? 'White' : 'Black';
+        showToast(`Reviewing as ${side} — step through to see annotations`);
+      }
       // Imported game: skip setup and land straight in playing phase
       setGamePhase('playing');
     },

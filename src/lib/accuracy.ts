@@ -2,6 +2,10 @@ export interface PlyEval {
   score: number; // centipawns from white's perspective
   mate: number | null;
   depth: number;
+  // Engine's top move UCI at the position AFTER this ply was played (i.e. the
+  // best response to this move). Recorded so the NAG computation for the
+  // NEXT ply can answer "was that move the engine's top choice?"
+  bestUci?: string;
 }
 
 // Convert centipawn eval (white's perspective) to white win percentage
@@ -29,11 +33,31 @@ export function moveAccuracy(
 // Classify a move by centipawn-loss threshold
 export type NagType = 'brilliant' | 'great' | 'best' | 'good' | 'book' | 'inaccuracy' | 'mistake' | 'blunder';
 
-export function classifyMove(cpLoss: number, isBook = false): NagType | null {
-  if (isBook) return 'book';
+// Optional context flags for finer classification. isCapture/isCheck/isSacrifice
+// let us distinguish "great tactical find" from "play-it-safe best move", and
+// "brilliant sacrifice" from "best move that happens to be a recapture".
+export interface ClassifyContext {
+  isBook?: boolean;
+  isBest?: boolean; // exactly matches engine's top choice
+  isCapture?: boolean;
+  isCheck?: boolean;
+  isSacrifice?: boolean; // piece we're moving loses net material on next ply
+}
+
+export function classifyMove(cpLoss: number, ctx: ClassifyContext = {}): NagType | null {
+  if (ctx.isBook) return 'book';
+  // Negative classifications come first — a blunder is a blunder even if the
+  // piece being moved happens to capture something.
   if (cpLoss >= 300) return 'blunder';
   if (cpLoss >= 150) return 'mistake';
   if (cpLoss >= 50) return 'inaccuracy';
+  // Positive classifications, ordered from strongest-to-weakest. A true
+  // brilliant ("!!") requires a sacrifice that still evaluates well, which
+  // is hard to stumble into by accident — keep the threshold tight.
+  if (ctx.isSacrifice && cpLoss < 15) return 'brilliant';
+  if (ctx.isBest && (ctx.isCapture || ctx.isCheck) && cpLoss < 10) return 'great';
+  if (cpLoss < 5 || ctx.isBest) return 'best';
+  if (cpLoss < 25) return 'good';
   return null;
 }
 
@@ -41,7 +65,7 @@ export const NAG_META: Record<NagType, { label: string; symbol: string; color: s
   brilliant: { label: 'Brilliant', symbol: '!!', color: '#1da198', bg: 'rgba(29,161,152,0.15)' },
   great: { label: 'Great', symbol: '!', color: '#1a9aeb', bg: 'rgba(26,154,235,0.15)' },
   best: { label: 'Best', symbol: '★', color: '#759900', bg: 'rgba(117,153,0,0.15)' },
-  good: { label: 'Good', symbol: '', color: '#8f8d89', bg: 'transparent' },
+  good: { label: 'Good', symbol: '✓', color: '#5a8a3a', bg: 'rgba(90,138,58,0.08)' },
   book: { label: 'Book', symbol: '📖', color: '#a88a64', bg: 'rgba(168,138,100,0.15)' },
   inaccuracy: { label: 'Inaccuracy', symbol: '?!', color: '#e8a300', bg: 'rgba(232,163,0,0.15)' },
   mistake: { label: 'Mistake', symbol: '?', color: '#e68f00', bg: 'rgba(230,143,0,0.15)' },

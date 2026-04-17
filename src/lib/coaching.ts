@@ -257,31 +257,34 @@ export function explainMove(input: ExplainInput): CoachExplanation {
   const responseSan = uciPvToSan(postBadFen, responsePvUci, 6);
   const deliversMate = mateDistanceFromPv(responseSan);
 
-  // Build the "why bad" sentence
+  // Build the "why bad" sentence — we lean growth-oriented here: describe
+  // the threat, then invite the user to find a better path. The goal is to
+  // make the user feel like a learner exploring a puzzle, not a student
+  // being graded.
   if (deliversMate !== null) {
-    whyBad = `After ${badMoveSan}, ${oppName} can force mate in ${deliversMate}.`;
+    whyBad = `Careful! After ${badMoveSan}, ${oppName} has a forced mate in ${deliversMate}. Let's find a way to sidestep it.`;
   } else if (missedMate !== null) {
-    whyBad = `${badMoveSan} missed a forced mate in ${missedMate}. You had the win on the board.`;
+    whyBad = `Close — you had a forced mate in ${missedMate} on the board. ${badMoveSan} lets it slip; see if you can spot the win.`;
   } else if (isTradeRecap && userMovedTarget) {
     // User initiated a trade — opponent's "capture" is just the recapture
     // completing the exchange, not winning material. Don't reveal the
     // engine's preferred alternative here; the retry flow gives progressive
     // hints if the user can't find it.
     const userPieceName = pieceName(userMovedTarget.type);
-    whyBad = `${badMoveSan} initiates a trade for the ${userPieceName} on ${userToSquare}, but the resulting position drops by about ${dropPawns} pawns of evaluation. There's a stronger move here — see if you can find it.`;
+    whyBad = `${badMoveSan} trades the ${userPieceName} on ${userToSquare}, but the resulting position loses about ${dropPawns} pawns of ground. There's a stronger idea here — give it a shot.`;
   } else if (oppCapture && oppCapture.ply <= 2) {
     const capturedValue = PIECE_VALUES[oppCapture.capturedType];
     if (capturedValue >= 3) {
-      whyBad = `${badMoveSan} left your ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare} hanging — ${oppName} simply takes it with their ${pieceName(oppCapture.attackerType)}.`;
+      whyBad = `${badMoveSan} leaves your ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare} undefended — ${oppName} can scoop it up with their ${pieceName(oppCapture.attackerType)}. There's a safer move here.`;
     } else {
-      whyBad = `${badMoveSan} lets ${oppName} pick off a ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare}.`;
+      whyBad = `${badMoveSan} gives ${oppName} a chance to grab the ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare}. Try a move that keeps it protected.`;
     }
   } else if (oppCapture) {
-    whyBad = `${badMoveSan} gives ${oppName} a tactical blow a few moves deep — they can win a ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare} within ${oppCapture.ply} plies.`;
+    whyBad = `There's a multi-move tactic hiding here: ${oppName} can target your ${pieceName(oppCapture.capturedType)} on ${oppCapture.toSquare} within ${oppCapture.ply} plies. See if you can find the move that shuts it down.`;
   } else if (dropCp >= 300) {
-    whyBad = `${badMoveSan} hands ${oppName} a large positional or strategic advantage — the evaluation swings by about ${dropPawns} pawns against you.`;
+    whyBad = `The engine thinks ${badMoveSan} gives up about ${dropPawns} pawns of positional value. Look for a move that keeps the balance more even.`;
   } else {
-    whyBad = `${badMoveSan} is inaccurate — the position worsens by about ${dropPawns} pawns for ${moverName}.`;
+    whyBad = `${badMoveSan} nudges the balance by about ${dropPawns} pawns — close to the mark, but there's a tighter path. Give it another look.`;
   }
 
   // --- Why the best move is best -------------------------------------------
@@ -453,14 +456,18 @@ export function findRefutation(fen: string): {
   return null;
 }
 
+// Softer, learning-oriented labels. The traditional blunder/mistake/
+// inaccuracy vocabulary reads as judgmental in a coaching context; the
+// coach's entire job is to help the user grow, so we frame each severity
+// as a gradient of learning opportunity rather than a verdict.
 export function severityLabel(nag: NagType): string {
   switch (nag) {
     case 'blunder':
-      return 'Blunder';
+      return 'Teaching moment';
     case 'mistake':
-      return 'Mistake';
+      return 'Worth a look';
     case 'inaccuracy':
-      return 'Inaccuracy';
+      return 'Minor slip';
     default:
       return 'Note';
   }

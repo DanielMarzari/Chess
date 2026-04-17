@@ -125,15 +125,15 @@ export default function CoachPanel({
 
         {subPhase === 'pausing' && (
           <div className="text-[var(--foreground-strong)]">
-            Hold up —{' '}
-            <span className="font-mono font-bold">{badMoveSan}</span> looks shaky. Let me show
-            you what happens…
+            Interesting choice —{' '}
+            <span className="font-mono font-bold">{badMoveSan}</span>. Let's see how this one
+            plays out together…
           </div>
         )}
 
         {subPhase === 'demo' && (
           <div className="text-[var(--foreground)] text-[13px] leading-relaxed">
-            Watch what your opponent can do after{' '}
+            Here's what your opponent would likely do after{' '}
             <span className="font-mono font-bold text-[var(--foreground-strong)]">{badMoveSan}</span>.
           </div>
         )}
