@@ -2116,6 +2116,18 @@ export default function PlayView({
           className={`shrink-0 mx-auto lg:mx-0 space-y-2 ${gamePhase === 'setup' ? 'opacity-60 pointer-events-none' : ''}`}
           style={{ maxWidth: BOARD_WIDTH, width: '100%' }}
         >
+          {/* Opponent card — above the board */}
+          {gamePhase !== 'setup' &&
+            (committedMode === 'cpu' || committedMode === 'coach') &&
+            computerPlays && (
+              <PlayerBadge
+                name="CPU"
+                elo={sf.elo}
+                color={computerPlays}
+                turn={game.turn() === computerPlays && !game.isGameOver()}
+              />
+            )}
+
           {clock.tc && gamePhase !== 'setup' && (
             <ClockDisplay
               seconds={boardOrientation === 'white' ? clock.state.black : clock.state.white}
@@ -2181,18 +2193,23 @@ export default function PlayView({
             />
           )}
 
+          {/* User card — below the board */}
+          {gamePhase !== 'setup' &&
+            (committedMode === 'cpu' || committedMode === 'coach') &&
+            computerPlays && (
+              <PlayerBadge
+                name="You"
+                elo={userRating}
+                color={computerPlays === 'w' ? 'b' : 'w'}
+                turn={game.turn() !== computerPlays && !game.isGameOver()}
+              />
+            )}
+
           {gamePhase !== 'setup' && (
             <>
               <div className="flex items-center justify-between gap-2 text-sm flex-wrap">
                 <span className="text-[var(--foreground-strong)]">{status}</span>
                 <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                  {(committedMode === 'cpu' || committedMode === 'coach') && computerPlays && (
-                    <span>
-                      You: {computerPlays === 'w' ? '● Black' : '○ White'}
-                      <span className="mx-2 text-[var(--border)]">|</span>
-                      CPU {sf.elo}
-                    </span>
-                  )}
                   {allowPremoves && (
                     <span className="text-[10px] opacity-70">right-click to clear premoves</span>
                   )}
@@ -2389,6 +2406,40 @@ export default function PlayView({
           <span className="text-[var(--accent)]">✓</span> {toast}
         </div>
       )}
+    </div>
+  );
+}
+
+function PlayerBadge({
+  name,
+  elo,
+  color,
+  turn,
+}: {
+  name: string;
+  elo: number;
+  color: 'w' | 'b';
+  turn: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-[var(--surface)] border text-sm ${
+        turn ? 'border-[var(--accent)]' : 'border-[var(--border)]'
+      }`}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span
+          className={`inline-block w-3 h-3 rounded-sm border border-[var(--border)] ${
+            color === 'w' ? 'bg-white' : 'bg-black'
+          }`}
+          aria-hidden
+        />
+        <span className="font-medium text-[var(--foreground-strong)] truncate">{name}</span>
+        {turn && (
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse" aria-label="to move" />
+        )}
+      </div>
+      <span className="font-mono tabular-nums text-[var(--muted)] text-xs">{elo}</span>
     </div>
   );
 }
