@@ -152,6 +152,7 @@ export default function PlayView({
   const [moveEvals, setMoveEvals] = useState<(PlyEval | null)[]>([]);
   const [nags, setNags] = useState<(NagType | null)[]>([]);
   const [annotations, setAnnotations] = useState<Record<number, string>>({});
+  const [gameId, setGameId] = useState<number | null>(null);
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
   const gameResultShownRef = useRef<string | null>(null);
 
@@ -298,6 +299,8 @@ export default function PlayView({
     if (committedMode !== 'coach') return;
     if (coachActive) return;
     if (moveHistory.length === 0) return;
+    // If coachingMode is 'review' only, skip live coaching
+    if (settings.coachingMode === 'review') return;
     const lastIdx = moveHistory.length - 1;
     if (coachedIndicesRef.current.has(lastIdx)) return;
 
@@ -1402,7 +1405,12 @@ export default function PlayView({
         }),
       })
         .then((r) => {
-          if (r.ok) showToast('Saved to Review');
+          if (r.ok) {
+            r.json().then((data) => {
+              setGameId(data.id);
+              showToast('Saved to Review');
+            });
+          }
         })
         .catch(() => {
           // silent — user can still manually save
@@ -1753,7 +1761,13 @@ export default function PlayView({
           black: meta.black,
         }),
       });
-      showToast(res.ok ? 'Saved' : 'Save failed');
+      if (res.ok) {
+        const data = await res.json();
+        setGameId(data.id);
+        showToast('Saved');
+      } else {
+        showToast('Save failed');
+      }
     } catch {
       showToast('Save failed');
     }
@@ -2517,6 +2531,8 @@ export default function PlayView({
         whiteAccuracy={whiteAcc}
         blackAccuracy={blackAcc}
         nags={nags}
+        gameId={gameId || undefined}
+        showReviewButton={settings.coachingMode === 'review' || settings.coachingMode === 'both'}
         onClose={() => setGameResult(null)}
         onNewGame={() => {
           setGameResult(null);
@@ -2549,6 +2565,12 @@ export default function PlayView({
             break;
           }
           goToMove(targetIdx);
+        }}
+        onReview={() => {
+          if (gameId) {
+            setGameResult(null);
+            window.location.href = `/mentor/review/${gameId}`;
+          }
         }}
       />
 
