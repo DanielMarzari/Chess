@@ -31,23 +31,22 @@ jobs:
 
       - name: Deploy
         run: |
-          rsync -avz --delete --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
+          rsync -avzO --no-perms --no-times --delete --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
             -e "ssh -i ~/.ssh/deploy_key" \
             .next/standalone/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:
 
-          rsync -avz \
+          rsync -avzO --no-perms --no-times \
             -e "ssh -i ~/.ssh/deploy_key" \
             .next/static/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:.next/static/
 
           if [ -d "public" ]; then
-            rsync -avz \
+            rsync -avzO --no-perms --no-times \
               -e "ssh -i ~/.ssh/deploy_key" \
               public/ \
               ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:public/
           fi
 
-          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh'restart'
+          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} restart
 
